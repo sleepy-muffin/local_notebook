@@ -60,6 +60,11 @@ public:
   void set_assistant_memory(std::string memory);
   void save_assistant();
 
+  // Removes an assistant's on-disk directory. Refuses to delete the assistant
+  // this process has open (its database and lock are still in use) and returns
+  // false in that case or when the removal fails.
+  bool delete_assistant(const std::string &uuid);
+
   [[nodiscard]] std::optional<Session> session(std::uint32_t session_id) const;
   [[nodiscard]] std::vector<Message> messages(std::uint32_t session_id) const;
   [[nodiscard]] std::vector<Message> recent_messages(std::uint32_t session_id, std::size_t count) const;

@@ -40,6 +40,10 @@ public:
 
   void save_assistant(const std::string &uuid, const Assistant &assistant) const;
 
+  // Removes the assistant's whole on-disk directory (settings, database, log).
+  // Returns false for an empty uuid or when the directory could not be removed.
+  bool delete_assistant(const std::string &uuid) const;
+
 private:
   // Mutable so main() can redirect the whole tree. Defaults to the historical
   // working-directory-relative location that the tests and the screenshot tool rely

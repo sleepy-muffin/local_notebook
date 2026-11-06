@@ -39,6 +39,8 @@ private:
   void open_selected();
   // Edits the selected assistant in place, reusing its UUID.
   void edit_selected();
+  // Deletes the selected assistant after the user confirms.
+  void delete_selected();
   // Creates a fresh assistant under a new UUID.
   void create_new();
 

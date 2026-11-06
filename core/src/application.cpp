@@ -141,6 +141,23 @@ void lnb::core::application::save_assistant() {
     store_.save_assistant(state->uuid_, state->assistant_);
 }
 
+bool lnb::core::application::delete_assistant(const std::string &uuid) {
+  if (uuid.empty()) {
+    return false;
+  }
+
+  // The open assistant still holds its database connection and instance lock,
+  // so its directory must not be removed from under it.
+  if (assistant_state_ != nullptr) {
+    auto state = assistant_state_->lock();
+    if (state->uuid_ == uuid) {
+      return false;
+    }
+  }
+
+  return store_.delete_assistant(uuid);
+}
+
 std::optional<lnb::core::Session> lnb::core::application::session(std::uint32_t session_id) const {
   if (assistant_state_ == nullptr)
     return std::nullopt;

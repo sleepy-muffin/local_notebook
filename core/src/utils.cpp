@@ -182,6 +182,17 @@ void lnb::core::store::save_assistant(const std::string& uuid, const Assistant& 
   out << boost::json::serialize(to_json(assistant)) << '\n';
 }
 
+bool lnb::core::store::delete_assistant(const std::string& uuid) const {
+  // An empty uuid would resolve to the data root itself, so refuse it.
+  if (uuid.empty()) {
+    return false;
+  }
+
+  std::error_code error;
+  std::filesystem::remove_all(this->assistant_dir(uuid), error);
+  return !error;
+}
+
 std::filesystem::path lnb::core::store::data_root() const {
   return this->g_data_root;
 }

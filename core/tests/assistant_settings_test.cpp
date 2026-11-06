@@ -8,10 +8,12 @@
 #include "local_notebook/core/model.hpp"
 #include "local_notebook/core/utils.hpp"
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -80,6 +82,25 @@ int main() {
   // default" the other reasoning key uses.
   expect(legacy.summary_reasoning_effort_ == "none", "legacy summary reasoning default");
   expect(legacy.search_endpoint_.empty(), "legacy search endpoint default is empty");
+
+  // Deleting an assistant removes its whole directory and drops it from the
+  // scan, while an empty uuid is refused so the data root cannot be wiped.
+  expect(store.delete_assistant("test-uuid"), "delete_assistant succeeds");
+  expect(
+      !std::filesystem::exists(root / "test-uuid"),
+      "delete_assistant removes the directory"
+  );
+
+  const std::vector<std::string> remaining = store.scan_assistants();
+  expect(
+      std::find(remaining.begin(), remaining.end(), "test-uuid") == remaining.end(),
+      "deleted assistant is no longer listed"
+  );
+  expect(!store.delete_assistant(""), "delete_assistant refuses an empty uuid");
+  expect(
+      std::filesystem::is_directory(root),
+      "refused deletion leaves the data root in place"
+  );
 
   std::filesystem::remove_all(root, ignored);
 

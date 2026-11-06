@@ -494,7 +494,163 @@
         "danger": [220, 50, 47, 1.0],
         "danger_text": [253, 246, 227, 1.0]
       }
+    },
+
+    "Medieval Tavern": {
+      "dark": true,
+      "colors": {
+        "window": [24, 18, 14, 1.0],
+        "surface": [36, 27, 21, 1.0],
+        "base": [46, 35, 27, 1.0],
+
+        "text": [235, 220, 195, 1.0],
+        "text_muted": [176, 155, 128, 1.0],
+
+        "accent": [214, 158, 74, 1.0],
+        "accent_hover": [231, 179, 97, 1.0],
+        "accent_active": [184, 130, 55, 1.0],
+        "accent_text": [24, 18, 14, 1.0],
+
+        "bubble_user": [74, 55, 39, 1.0],
+        "bubble_user_text": [240, 228, 206, 1.0],
+        "bubble_assistant": [41, 31, 24, 1.0],
+        "bubble_assistant_text": [235, 220, 195, 1.0],
+        "bubble_assistant_code": [31, 23, 18, 1.0],
+
+        "conversation_background": [24, 18, 14, 1.0],
+        "input_background": [24, 18, 14, 1.0],
+
+        "border": [78, 60, 45, 1.0],
+
+        "danger": [190, 74, 58, 1.0],
+        "danger_text": [24, 18, 14, 1.0]
+      }
+    },
+
+    "Medieval Tavern (Translucent)": {
+      "dark": true,
+      "colors": {
+        "window": [24, 18, 14, 1.0],
+        "surface": [36, 27, 21, 0.0],
+        "base": [46, 35, 27, 0.38],
+
+        "text": [235, 220, 195, 1.0],
+        "text_muted": [176, 155, 128, 0.85],
+
+        "accent": [214, 158, 74, 1.0],
+        "accent_hover": [231, 179, 97, 1.0],
+        "accent_active": [184, 130, 55, 1.0],
+        "accent_text": [24, 18, 14, 1.0],
+
+        "bubble_user": [74, 55, 39, 0.35],
+        "bubble_user_text": [240, 228, 206, 1.0],
+        "bubble_assistant": [41, 31, 24, 0.5],
+        "bubble_assistant_text": [235, 220, 195, 1.0],
+        "bubble_assistant_code": [31, 23, 18, 0.35],
+
+        "conversation_background": [24, 18, 14, 0.0],
+        "input_background": [24, 18, 14, 0.0],
+
+        "border": [78, 60, 45, 0.35],
+
+        "danger": [190, 74, 58, 1.0],
+        "danger_text": [24, 18, 14, 1.0]
+      }
+    },
+
+    "Illuminated Manuscript": {
+      "dark": false,
+      "colors": {
+        "window": [236, 226, 203, 1.0],
+        "surface": [243, 235, 216, 1.0],
+        "base": [249, 243, 228, 1.0],
+
+        "text": [58, 44, 32, 1.0],
+        "text_muted": [122, 103, 82, 1.0],
+
+        "accent": [166, 54, 43, 1.0],
+        "accent_hover": [190, 71, 57, 1.0],
+        "accent_active": [138, 41, 33, 1.0],
+        "accent_text": [249, 243, 228, 1.0],
+
+        "bubble_user": [222, 208, 180, 1.0],
+        "bubble_user_text": [58, 44, 32, 1.0],
+        "bubble_assistant": [240, 232, 213, 1.0],
+        "bubble_assistant_text": [58, 44, 32, 1.0],
+        "bubble_assistant_code": [230, 219, 196, 1.0],
+
+        "conversation_background": [249, 243, 228, 1.0],
+        "input_background": [249, 243, 228, 1.0],
+
+        "border": [204, 188, 160, 1.0],
+
+        "danger": [150, 36, 30, 1.0],
+        "danger_text": [249, 243, 228, 1.0]
+      }
+    },
+
+    "Alchemist's Study": {
+      "dark": true,
+      "colors": {
+        "window": [16, 22, 20, 1.0],
+        "surface": [24, 32, 29, 1.0],
+        "base": [31, 41, 37, 1.0],
+
+        "text": [214, 226, 210, 1.0],
+        "text_muted": [146, 164, 152, 1.0],
+
+        "accent": [198, 166, 92, 1.0],
+        "accent_hover": [219, 188, 112, 1.0],
+        "accent_active": [163, 135, 71, 1.0],
+        "accent_text": [16, 22, 20, 1.0],
+
+        "bubble_user": [45, 66, 57, 1.0],
+        "bubble_user_text": [216, 230, 220, 1.0],
+        "bubble_assistant": [27, 36, 32, 1.0],
+        "bubble_assistant_text": [214, 226, 210, 1.0],
+        "bubble_assistant_code": [21, 29, 26, 1.0],
+
+        "conversation_background": [16, 22, 20, 1.0],
+        "input_background": [16, 22, 20, 1.0],
+
+        "border": [53, 70, 61, 1.0],
+
+        "danger": [205, 92, 80, 1.0],
+        "danger_text": [16, 22, 20, 1.0]
+      }
+    },
+
+    "Royal Court": {
+      "dark": true,
+      "colors": {
+        "window": [24, 20, 38, 1.0],
+        "surface": [33, 27, 51, 1.0],
+        "base": [41, 34, 63, 1.0],
+
+        "text": [232, 226, 244, 1.0],
+        "text_muted": [172, 162, 194, 1.0],
+
+        "accent": [212, 175, 95, 1.0],
+        "accent_hover": [232, 199, 126, 1.0],
+        "accent_active": [180, 145, 72, 1.0],
+        "accent_text": [24, 20, 38, 1.0],
+
+        "bubble_user": [72, 54, 100, 1.0],
+        "bubble_user_text": [236, 230, 246, 1.0],
+        "bubble_assistant": [36, 30, 55, 1.0],
+        "bubble_assistant_text": [232, 226, 244, 1.0],
+        "bubble_assistant_code": [29, 24, 45, 1.0],
+
+        "conversation_background": [24, 20, 38, 1.0],
+        "input_background": [24, 20, 38, 1.0],
+
+        "border": [70, 58, 96, 1.0],
+
+        "danger": [214, 96, 108, 1.0],
+        "danger_text": [24, 20, 38, 1.0]
+      }
     }
+
   },
 
   "default_metrics": {

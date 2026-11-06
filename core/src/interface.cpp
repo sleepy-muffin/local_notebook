@@ -33,6 +33,10 @@ void interface::set_assistant_memory(std::string memory) {
 
 void interface::save_assistant() { application_->save_assistant(); }
 
+bool interface::delete_assistant(const std::string& uuid) {
+  return application_->delete_assistant(uuid);
+}
+
 const store& interface::get_store() const {
   return application_->get_store();
 }

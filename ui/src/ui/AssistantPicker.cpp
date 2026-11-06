@@ -1,6 +1,7 @@
 #include "ui/AssistantPicker.hpp"
 
 #include <QAbstractItemView>
+#include <QAction>
 #include <QCheckBox>
 #include <QFont>
 #include <QFontMetrics>
@@ -11,6 +12,7 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QListWidgetItem>
+#include <QMenu>
 #include <QMessageBox>
 #include <QPainter>
 #include <QPlainTextEdit>
@@ -375,6 +377,7 @@ AssistantPicker::AssistantPicker(
   list_->setSelectionRectVisible(false);
   list_->setMouseTracking(true);
   list_->viewport()->setMouseTracking(true);
+  list_->setContextMenuPolicy(Qt::CustomContextMenu);
 
   outer->addWidget(list_, 1);
   outer->addSpacing(16);
@@ -424,6 +427,26 @@ AssistantPicker::AssistantPicker(
   connect(list_, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem*) {
     open_selected();
   });
+  connect(
+      list_, &QListWidget::customContextMenuRequested, this,
+      [this](const QPoint& pos) {
+        QListWidgetItem* item = list_->itemAt(pos);
+        if (item == nullptr) {
+          return;
+        }
+
+        // The menu acts on the row under the cursor, so select it first.
+        list_->setCurrentItem(item);
+
+        QMenu menu(list_);
+        QAction* remove = menu.addAction(trs("Delete assistant"));
+        QAction* chosen = menu.exec(list_->viewport()->mapToGlobal(pos));
+
+        if (chosen == remove) {
+          delete_selected();
+        }
+      }
+  );
   connect(new_button, &QPushButton::clicked, this, [this]() { create_new(); });
   connect(edit_button_, &QPushButton::clicked, this, [this]() { edit_selected(); });
   connect(open_button_, &QPushButton::clicked, this, [this]() { open_selected(); });
@@ -584,6 +607,49 @@ void AssistantPicker::edit_selected() {
 
   refresh();
   select_uuid(uuid);
+  update_actions();
+}
+
+void AssistantPicker::delete_selected() {
+  const QString uuid = selected_uuid();
+  if (uuid.isEmpty()) {
+    return;
+  }
+
+  const std::string id = uuid.toStdString();
+  const lnb::core::Assistant existing = api_.get_store().load_assistant(id);
+  const QString name =
+      existing.name_.empty() ? trs("Untitled assistant") : to_qstring(existing.name_);
+
+  const QMessageBox::StandardButton answer = QMessageBox::warning(
+      this, trs("Delete Assistant"),
+      trs("Delete \"%1\"? Its sessions, messages and settings will be removed "
+          "permanently. This cannot be undone.")
+          .arg(name),
+      QMessageBox::Yes | QMessageBox::No, QMessageBox::No
+  );
+
+  if (answer != QMessageBox::Yes) {
+    return;
+  }
+
+  if (!api_.delete_assistant(id)) {
+    QMessageBox::warning(
+        this, trs("Unable to delete assistant"),
+        trs("The assistant could not be deleted. It may still be open in another "
+            "instance.")
+    );
+    return;
+  }
+
+  shark::log::info("deleted assistant {}", id);
+
+  // Do not reopen an assistant that no longer exists on the next launch.
+  if (settings_.last_assistant == id) {
+    settings_.last_assistant.clear();
+  }
+
+  refresh();
   update_actions();
 }
 

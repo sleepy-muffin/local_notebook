@@ -597,7 +597,10 @@ void ConversationView::append_rendered_message(
 
   render::MessageMeta meta = make_message_meta(
       role, message.id_, to_u16(format_message_time(message.made_at_)),
-      to_u16(format_token_estimate(api_.message_tokens(message))), from_self, to_u16(raw));
+      to_u16(format_token_estimate(api_.message_tokens(message))),
+      // Any stored message can be edited in place, replies included. Only the
+      // still-streaming reply is absent here: it has no id until it is stored.
+      message.id_ != 0, to_u16(raw));
 
   meta.status = std::move(status);
 
