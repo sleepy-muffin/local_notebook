@@ -11,7 +11,7 @@
 #include "net/tools.hpp"
 
 // The protocol-neutral request model. The protocol enum itself is public
-// (local-notebook-core/api_protocol.hpp), because it is part of Assistant.
+// (local_notebook/core/api_protocol.hpp), because it is part of Assistant.
 namespace lnb::core {
 
 // One entry in the outgoing conversation, independent of the wire API. The

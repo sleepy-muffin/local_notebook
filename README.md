@@ -3,7 +3,7 @@
 An AI client optimized to be high-performance and comfortable to be used.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-cba6f7.svg)](LICENSE.txt)
-[![Latest release](https://img.shields.io/github/v/release/sleepy-muffin/local-notebook?color=f5c2e7)](../../releases/latest)
+[![Latest release](https://img.shields.io/github/v/release/sleepy-muffin/local_notebook?color=f5c2e7)](../../releases/latest)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows-cba6f7.svg)](#download)
 [![Built with Qt 6](https://img.shields.io/badge/Qt-6-cba6f7.svg)](https://qt.io)
 
@@ -16,8 +16,8 @@ An AI client optimized to be high-performance and comfortable to be used.
 
 | Platform | File |
 |---|---|
-| **Linux** (x86_64) | [`local-notebook-*-linux-x86_64.AppImage`](../../releases/latest) |
-| **Windows** (x86_64) | [`local-notebook-*-windows-x86_64.zip`](../../releases/latest) |
+| **Linux** (x86_64) | [`local_notebook-*-linux-x86_64.AppImage`](../../releases/latest) |
+| **Windows** (x86_64) | [`local_notebook-*-windows-x86_64.zip`](../../releases/latest) |
 
 ---
 

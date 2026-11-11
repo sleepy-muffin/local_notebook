@@ -134,7 +134,7 @@ const wl_registry_listener registry_listener = {
 // descriptor (and the buffer mapped from it).
 int create_shm_fd(std::size_t size) {
 #if defined(MFD_CLOEXEC)
-  const int memory_fd = memfd_create("local-notebook-icon", MFD_CLOEXEC);
+  const int memory_fd = memfd_create("local_notebook-icon", MFD_CLOEXEC);
 
   if (memory_fd >= 0) {
     if (ftruncate(memory_fd, static_cast<off_t>(size)) == 0) {
@@ -147,7 +147,7 @@ int create_shm_fd(std::size_t size) {
 
   for (int attempt = 0; attempt < 16; ++attempt) {
     char name[64];
-    std::snprintf(name, sizeof name, "/local-notebook-icon-%ld-%d",
+    std::snprintf(name, sizeof name, "/local_notebook-icon-%ld-%d",
                   static_cast<long>(getpid()), attempt);
 
     const int fd = shm_open(name, O_RDWR | O_CREAT | O_EXCL, 0600);

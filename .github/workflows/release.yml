@@ -125,9 +125,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          # The UI target's OUTPUT_NAME is local-notebook-${PLATFORM}-${ARCH}
-          # (see ui/CMakeLists.txt), so it is not plain "local-notebook".
-          executable="build/ui/local-notebook-linux-x86_64"
+          # The app target's OUTPUT_NAME is local_notebook-${PLATFORM}-${ARCH}
+          # (see ui/CMakeLists.txt), so it is not plain "local_notebook".
+          executable="build/ui/local_notebook-linux-x86_64"
           appdir="AppDir"
 
           if [ ! -f "$executable" ]; then
@@ -137,19 +137,19 @@ jobs:
 
           mkdir -p "$appdir/usr/bin"
 
-          cp "$executable" "$appdir/usr/bin/local-notebook"
+          cp "$executable" "$appdir/usr/bin/local_notebook"
 
-          cat > local-notebook.desktop <<'EOF'
+          cat > local_notebook.desktop <<'EOF'
           [Desktop Entry]
           Type=Application
           Name=Local Notebook
-          Exec=local-notebook
-          Icon=local-notebook
+          Exec=local_notebook
+          Icon=local_notebook
           Categories=Utility;
           Terminal=false
           EOF
 
-          cp assets/appicon/app-256.png local-notebook.png
+          cp assets/appicon/app-256.png local_notebook.png
 
           wget -q \
             https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage \
@@ -210,8 +210,8 @@ jobs:
 
           ./linuxdeploy.AppImage \
             --appdir "$appdir" \
-            --desktop-file local-notebook.desktop \
-            --icon-file local-notebook.png \
+            --desktop-file local_notebook.desktop \
+            --icon-file local_notebook.png \
             --plugin qt \
             --output appimage
 
@@ -224,15 +224,15 @@ jobs:
           fi
 
           mv "$appimage" \
-            "local-notebook-${RELEASE_TAG}-linux-x86_64.AppImage"
+            "local_notebook-${RELEASE_TAG}-linux-x86_64.AppImage"
 
-          file "local-notebook-${RELEASE_TAG}-linux-x86_64.AppImage"
+          file "local_notebook-${RELEASE_TAG}-linux-x86_64.AppImage"
 
       - name: Upload Linux artifact
         uses: actions/upload-artifact@v4
         with:
-          name: local-notebook-linux-x86_64
-          path: local-notebook-${{ steps.version.outputs.tag }}-linux-x86_64.AppImage
+          name: local_notebook-linux-x86_64
+          path: local_notebook-${{ steps.version.outputs.tag }}-linux-x86_64.AppImage
           if-no-files-found: error
 
   windows:
@@ -419,9 +419,9 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
 
-          # Matches OUTPUT_NAME "local-notebook-${PLATFORM}-${ARCH}" in
+          # Matches OUTPUT_NAME "local_notebook-${PLATFORM}-${ARCH}" in
           # ui/CMakeLists.txt.
-          $exe = "build/ui/local-notebook-windows-x86_64.exe"
+          $exe = "build/ui/local_notebook-windows-x86_64.exe"
           $release = "release"
 
           if (-not (Test-Path $exe)) {
@@ -430,7 +430,7 @@ jobs:
 
           New-Item -ItemType Directory -Force -Path $release | Out-Null
 
-          $targetExe = "local-notebook-$env:RELEASE_TAG.exe"
+          $targetExe = "local_notebook-$env:RELEASE_TAG.exe"
           Copy-Item $exe "$release/$targetExe"
 
           # Deploy Qt DLLs, platform plugins and MSVC runtime.
@@ -458,14 +458,14 @@ jobs:
           # Package the complete application directory.
           Compress-Archive `
             -Path "$release/*" `
-            -DestinationPath "local-notebook-$env:RELEASE_TAG-windows-x86_64.zip" `
+            -DestinationPath "local_notebook-$env:RELEASE_TAG-windows-x86_64.zip" `
             -CompressionLevel Optimal
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
-          name: local-notebook-windows-x86_64
-          path: local-notebook-${{ steps.version.outputs.tag }}-windows-x86_64.zip
+          name: local_notebook-windows-x86_64
+          path: local_notebook-${{ steps.version.outputs.tag }}-windows-x86_64.zip
           if-no-files-found: error
 
   release:
@@ -480,12 +480,12 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: local-notebook-linux-x86_64
+          name: local_notebook-linux-x86_64
           path: release
 
       - uses: actions/download-artifact@v4
         with:
-          name: local-notebook-windows-x86_64
+          name: local_notebook-windows-x86_64
           path: release
 
       - name: Generate SHA256SUMS

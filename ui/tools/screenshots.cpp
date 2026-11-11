@@ -134,13 +134,13 @@ void seed_design_session(lnb::core::interface& api, std::uint32_t session_id) {
 
 int main(int argc, char** argv) {
   // The tool runs from a scratch directory without themes/ or icons/ on disk,
-  // so it depends on the resources compiled into local-notebook-ui-core. See
+  // so it depends on the resources compiled into local_notebook::ui. See
   // the note in src/main.cpp: a static library's resource object is otherwise
   // dropped by the linker.
   Q_INIT_RESOURCE(local_notebook);
 
   if (argc < 2) {
-    std::cerr << "usage: local-notebook-screenshots <output-directory>\n";
+    std::cerr << "usage: local_notebook_screenshots <output-directory>\n";
     return EXIT_FAILURE;
   }
 

@@ -6,7 +6,7 @@ add_executable(
 target_link_libraries(
   assistant-summary-log-test
   PRIVATE
-    local-notebook-core
+    local_notebook::core
 )
 
 add_test(NAME assistant-summary-log COMMAND assistant-summary-log-test)
@@ -19,7 +19,7 @@ add_executable(
 target_link_libraries(
   url-validation-test
   PRIVATE
-    local-notebook-core
+    local_notebook::core
 )
 
 add_test(NAME url-validation COMMAND url-validation-test)
@@ -32,7 +32,7 @@ add_executable(
 target_link_libraries(
   http-generation-test
   PRIVATE
-    local-notebook-core
+    local_notebook::core
     Threads::Threads
 )
 
@@ -46,7 +46,7 @@ add_executable(
 target_link_libraries(
   length-truncation-test
   PRIVATE
-    local-notebook-core
+    local_notebook::core
     Threads::Threads
 )
 
@@ -66,7 +66,7 @@ target_include_directories(
 target_link_libraries(
   search-parse-test
   PRIVATE
-    local-notebook-core
+    local_notebook::core
     Boost::regex
 )
 
@@ -86,7 +86,7 @@ target_include_directories(
 target_link_libraries(
   tools-paths-test
   PRIVATE
-    local-notebook-core
+    local_notebook::core
 )
 
 add_test(NAME tools-paths COMMAND tools-paths-test)
@@ -105,7 +105,7 @@ target_include_directories(
 target_link_libraries(
   session-directories-test
   PRIVATE
-    local-notebook-core
+    local_notebook::core
     shark::sqlite3
 )
 
@@ -125,7 +125,7 @@ target_include_directories(
 target_link_libraries(
   assistant-settings-test
   PRIVATE
-    local-notebook-core
+    local_notebook::core
 )
 
 add_test(NAME assistant-settings COMMAND assistant-settings-test)
@@ -138,7 +138,7 @@ add_executable(
 target_link_libraries(
   instance-lock-test
   PRIVATE
-    local-notebook-core
+    local_notebook::core
 )
 
 add_test(NAME instance-lock COMMAND instance-lock-test)
@@ -151,7 +151,7 @@ add_executable(
 target_link_libraries(
   assistant-memory-filter-test
   PRIVATE
-    local-notebook-core
+    local_notebook::core
 )
 
 add_test(NAME assistant-memory-filter COMMAND assistant-memory-filter-test)
@@ -164,7 +164,7 @@ add_executable(
 target_link_libraries(
   concurrent-sessions-test
   PRIVATE
-    local-notebook-core
+    local_notebook::core
     Threads::Threads
 )
 
@@ -178,7 +178,7 @@ add_executable(
 target_link_libraries(
   generation-task-mirror-test
   PRIVATE
-    local-notebook-core
+    local_notebook::core
 )
 
 add_test(
@@ -194,7 +194,7 @@ add_executable(
 target_link_libraries(
   message-coverage-test
   PRIVATE
-    local-notebook-core
+    local_notebook::core
     Threads::Threads
 )
 
@@ -214,7 +214,7 @@ target_include_directories(
 target_link_libraries(
   branch-summary-test
   PRIVATE
-    local-notebook-core
+    local_notebook::core
     shark::sqlite3
 )
 
@@ -234,7 +234,7 @@ target_include_directories(
 target_link_libraries(
   utf8-test
   PRIVATE
-    local-notebook-core
+    local_notebook::core
 )
 
 add_test(NAME utf8 COMMAND utf8-test)

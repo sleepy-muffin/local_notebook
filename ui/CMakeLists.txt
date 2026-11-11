@@ -1,42 +1,7 @@
-cmake_minimum_required(VERSION 3.31)
-
-project(local-notebook-ui
-        LANGUAGES CXX
-)
-
-# ========== ---------- ---------- ---------- ==========
-#                   PLATFORM VARIABLES
-# ========== ---------- ---------- ---------- ==========
-
-
-# Platform string
-if(WIN32)
-    set(PLATFORM "windows")
-elseif(APPLE)
-    set(PLATFORM "macos")
-elseif(UNIX)
-    set(PLATFORM "linux")
-else()
-    set(PLATFORM "unknown")
-endif()
-
-
-# Architecture
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
-    set(ARCH "x86_64")
-elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|ARM64")
-    set(ARCH "arm64")
-else()
-    set(ARCH "${CMAKE_SYSTEM_PROCESSOR}")
-endif()
-
 # ========== ---------- ---------- ---------- ==========
 #                         SET UP
 # ========== ---------- ---------- ---------- ==========
 
-
-set(CMAKE_CXX_STANDARD 23)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Qt 6.8 is the minimum this project builds against: the transcript uses
 # QTextListFormat::start(), which older Qt does not have, and the release
@@ -74,27 +39,22 @@ set(LOCAL_NOTEBOOK_UI_SOURCES
         src/ui/TranscriptCanvas.cpp
         src/ui/theme.cpp
 
-        ${CMAKE_CURRENT_SOURCE_DIR}/../assets/local-notebook.qrc
+        ${CMAKE_CURRENT_SOURCE_DIR}/../assets/local_notebook.qrc
 )
 
-add_library(${PROJECT_NAME}-core STATIC
+# The Qt-facing half of the application: widgets, the settings layer and the
+# compiled-in resources. Everything it exports is reachable as
+# `local_notebook::ui`.
+local_notebook_add_module(ui STATIC
+        SOURCES
         ${LOCAL_NOTEBOOK_UI_SOURCES}
-)
 
-
-set_target_properties(${PROJECT_NAME}-core PROPERTIES
-        OUTPUT_NAME "${PROJECT_NAME}-core-${PLATFORM}-${ARCH}"
-)
-
-target_include_directories(${PROJECT_NAME}-core
-        PUBLIC
+        PUBLIC_INCLUDES
         ${CMAKE_CURRENT_SOURCE_DIR}/src
-)
 
-target_link_libraries(${PROJECT_NAME}-core
         PUBLIC
-        local-notebook-core
-        local-notebook-render
+        local_notebook::core
+        local_notebook::render
         shark::common
         Qt6::Core
         Qt6::Gui
@@ -149,26 +109,28 @@ endif()
 #                           UI
 # ========== ---------- ---------- ---------- ==========
 
-add_executable(${PROJECT_NAME}
+# The desktop executable. It owns main() plus the Wayland icon helper and links
+# the UI submodule, exposed to the rest of the build as `local_notebook::app`.
+add_executable(local_notebook_app
         src/main.cpp
         src/wayland_icon.cpp
         ${LOCAL_NOTEBOOK_WAYLAND_ICON_SOURCES}
 )
+add_executable(local_notebook::app ALIAS local_notebook_app)
 
-target_link_libraries(${PROJECT_NAME}
+target_link_libraries(local_notebook_app
         PRIVATE
-        ${PROJECT_NAME}-core
+        local_notebook::ui
         ${LOCAL_NOTEBOOK_WAYLAND_ICON_LIBRARIES}
 )
 
-target_compile_definitions(${PROJECT_NAME}
+target_compile_definitions(local_notebook_app
         PRIVATE
         ${LOCAL_NOTEBOOK_WAYLAND_ICON_DEFINITIONS}
 )
 
-
-set_target_properties(${PROJECT_NAME} PROPERTIES
-        OUTPUT_NAME "local-notebook-${PLATFORM}-${ARCH}"
+set_target_properties(local_notebook_app PROPERTIES
+        OUTPUT_NAME "local_notebook-${PLATFORM}-${ARCH}"
 )
 
 # ========== ---------- ---------- ---------- ==========
@@ -176,13 +138,13 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
 # ========== ---------- ---------- ---------- ==========
 
 # Development-only executable used to regenerate README screenshots.
-add_executable(local-notebook-screenshots
+add_executable(local_notebook_screenshots
         tools/screenshots.cpp
 )
 
-target_link_libraries(local-notebook-screenshots
+target_link_libraries(local_notebook_screenshots
         PRIVATE
-        local-notebook-ui-core
+        local_notebook::ui
 )
 
 # ========== ---------- ---------- ---------- ==========
@@ -200,7 +162,7 @@ add_executable(
 target_link_libraries(
         conversation-controller-test
         PRIVATE
-        local-notebook-ui-core
+        local_notebook::ui
 )
 
 add_test(NAME conversation-controller COMMAND conversation-controller-test)
@@ -215,7 +177,7 @@ add_executable(
 target_link_libraries(
         message-document-test
         PRIVATE
-        local-notebook-ui-core
+        local_notebook::ui
 )
 
 add_test(NAME message-document COMMAND message-document-test)
