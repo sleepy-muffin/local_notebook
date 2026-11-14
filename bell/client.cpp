@@ -6,6 +6,7 @@
 #include "message.hpp"
 #include <iostream>
 #include <algorithm>
+#include <set>
 #include <string_view>
 #include <cstdio>
 #include <ctime>
@@ -33,6 +34,10 @@
   using namespace felis::bell;
 
   boost::json::array input;
+
+  // Reasoning items are replayed by `id`; a later duplicate overwrites (here:
+  // is skipped) so the same reasoning item is never sent twice in one request.
+  std::set<std::string> replayed_reasoning_ids;
 
   for (const shadowed_message& msg: msgs) {
     switch (msg.kind_) {
@@ -83,8 +88,44 @@
         break;
       }
 
+      case message_kind::assistant_reasoning_payload: {
+        // The reasoning item(s) a GPT/o-series response produced, carrying the
+        // opaque `encrypted_content` that lets the model resume its own
+        // chain-of-thought. Replayed verbatim as `type:"reasoning"` input items;
+        // because the row was inserted *before* the output/`function_call` items
+        // it belongs to, they land in the right position. A deepseek-style model
+        // stores no payload, so there is nothing to emit.
+        if (!msg.reasoning_payload_.has_value() || msg.reasoning_payload_->empty()) {
+          break;
+        }
+        boost::system::error_code ec;
+        const boost::json::value parsed = boost::json::parse(*msg.reasoning_payload_, ec);
+        if (ec || !parsed.is_object()) {
+          break;
+        }
+        const boost::json::value* items =
+          parsed.as_object().if_contains("reasoning_items");
+        if (items == nullptr || !items->is_array()) {
+          break;
+        }
+        for (const boost::json::value& item : items->as_array()) {
+          if (!item.is_object()) {
+            continue;
+          }
+          const boost::json::object& object = item.as_object();
+          if (const boost::json::value* id = object.if_contains("id");
+              id != nullptr && id->is_string()) {
+            if (!replayed_reasoning_ids.insert(std::string(id->as_string())).second) {
+              continue;
+            }
+          }
+          input.emplace_back(boost::json::value(object));
+        }
+        break;
+      }
+
       default: {
-        // `undefined` and `assistant_reasoning` carry nothing to send here.
+        // `undefined` carries nothing to send here.
         break;
       }
     }
@@ -97,6 +138,7 @@
   const std::string& custom_instructions,
   const std::vector<felis::bell::shadowed_message>& msgs,
   const std::string& model,
+  const std::string& reasoning_effort,
   const felis::bell::tool_capabilities capabilities
 ) {
   boost::json::object payload;
@@ -113,15 +155,42 @@
   if (!custom_instructions.empty()) {
     payload["instructions"] = custom_instructions;
   }
-  //   if (request.max_output_tokens > 0) {
-  //     payload["max_output_tokens"] = request.max_output_tokens;
-  //   }
-  //
-  //   if (!request.reasoning_effort.empty()) {
-  //     boost::json::object reasoning;
-  //     reasoning["effort"] = request.reasoning_effort;
-  //     payload["reasoning"] = std::move(reasoning);
-  //   }
+
+  // Do not ask the provider to store the response: this client keeps the whole
+  // transcript itself and replays it, so `store:false` mirrors Zed and avoids
+  // depending on server-side conversation state.
+  payload["store"] = false;
+
+  // Request reasoning at the session's chosen level. An empty string or "none"
+  // means "do not request reasoning" (the user turned it off, or the model does
+  // not reason), so the field is omitted rather than sent as "none" — some
+  // gateways reject an explicit "none" effort.
+  const bool reasoning_on = !reasoning_effort.empty() && reasoning_effort != "none";
+  if (reasoning_on) {
+    boost::json::object reasoning;
+    reasoning["effort"] = reasoning_effort;
+    payload["reasoning"] = std::move(reasoning);
+  }
+
+  // Ask for the opaque `encrypted_content` half of every reasoning item so it can
+  // be stored and replayed. Needed whenever reasoning is on, and also whenever the
+  // input already carries stored reasoning items (GPT/o-series): without it the
+  // provider strips `encrypted_content` from the round-trip and the next request's
+  // replayed reasoning item is rejected. Mirrors Zed's `include` decision.
+  bool has_stored_reasoning = false;
+  for (const felis::bell::shadowed_message& msg : msgs) {
+    if (msg.kind_ == felis::bell::message_kind::assistant_reasoning_payload
+        && msg.reasoning_payload_.has_value()
+        && !msg.reasoning_payload_->empty()) {
+      has_stored_reasoning = true;
+      break;
+    }
+  }
+  if (reasoning_on || has_stored_reasoning) {
+    boost::json::array include;
+    include.emplace_back("reasoning.encrypted_content");
+    payload["include"] = std::move(include);
+  }
 
   return payload;
 }
@@ -149,7 +218,19 @@
   // not override that continuation reflex. A trailing user instruction does:
   // verified against the proxy, it turns a blank/task-continuation reply into a
   // clean "## Conversation Summary".
-  boost::json::array summary_input = build_input(msgs);
+  // The summariser only needs the readable transcript, so drop the stored
+  // reasoning-item rows: replaying `encrypted_content` into a summarisation turn
+  // (usually run at `effort:"none"`) is pointless and some gateways reject a
+  // reasoning input item when reasoning is disabled.
+  std::vector<felis::bell::shadowed_message> readable;
+  readable.reserve(msgs.size());
+  for (const felis::bell::shadowed_message& msg : msgs) {
+    if (msg.kind_ != felis::bell::message_kind::assistant_reasoning_payload) {
+      readable.push_back(msg);
+    }
+  }
+
+  boost::json::array summary_input = build_input(readable);
   {
     boost::json::object closing_turn;
     closing_turn["role"] = "user";
@@ -423,6 +504,7 @@ void felis::bell::client::prompt(
       sess.custom_instructions(),
       msgs,
       assistant_snapshot.model_,
+      sess.reasoning_effort(),
       caps);
 
     // Signal the start of this assistant message *before* any of its deltas. A
@@ -467,6 +549,62 @@ void felis::bell::client::prompt(
     }
 
     // std::cout << std::format("Remote: {}\n", v.text);
+
+    // Persist the reasoning item(s) this response produced (GPT/o-series
+    // `encrypted_content`) so a later request can replay them and the model can
+    // resume its chain-of-thought. Inserted *first*, ahead of this turn's
+    // assistant text and tool calls, so the replayed `reasoning` item lands before
+    // the output/`function_call` items it belongs to. deepseek-style models emit
+    // no reasoning items and store no payload, so this row is skipped for them.
+    {
+      boost::json::array reasoning_items;
+      std::set<std::string> seen_reasoning_ids;
+
+      for (const boost::json::object& item : v.response_items) {
+        const boost::json::value* type = item.if_contains("type");
+        if (type == nullptr || !type->is_string() || type->as_string() != "reasoning") {
+          continue;
+        }
+
+        // Normalise to exactly the wire shape the Responses API accepts back:
+        // {type, id, summary, content, encrypted_content, status}. Dropping any
+        // other field the provider echoed avoids replaying unknown properties.
+        boost::json::object normalized;
+        normalized["type"] = "reasoning";
+
+        if (const boost::json::value* id = item.if_contains("id"); id != nullptr) {
+          if (id->is_string()
+              && !seen_reasoning_ids.insert(std::string(id->as_string())).second) {
+            continue;
+          }
+          normalized["id"] = *id;
+        }
+        if (const boost::json::value* summary = item.if_contains("summary"); summary != nullptr) {
+          normalized["summary"] = *summary;
+        }
+        if (const boost::json::value* content = item.if_contains("content"); content != nullptr) {
+          normalized["content"] = *content;
+        }
+        if (const boost::json::value* encrypted = item.if_contains("encrypted_content");
+            encrypted != nullptr) {
+          normalized["encrypted_content"] = *encrypted;
+        }
+        if (const boost::json::value* status = item.if_contains("status"); status != nullptr) {
+          normalized["status"] = *status;
+        }
+
+        reasoning_items.emplace_back(std::move(normalized));
+      }
+
+      if (!reasoning_items.empty()) {
+        boost::json::object envelope;
+        envelope["reasoning_items"] = std::move(reasoning_items);
+        shadowed_message reasoning_row(
+          std::string(), message_kind::assistant_reasoning_payload);
+        reasoning_row.reasoning_payload_ = boost::json::serialize(envelope);
+        append_message(session_id, reasoning_row);
+      }
+    }
 
     // The proxy rejects empty assistant text items, so only persist a reply
     // that actually carries something to replay.

@@ -31,7 +31,7 @@ enum class message_kind : std::uint8_t {
   undefined = 0,
   user_prompt = 1,
   assistant_output = 2,
-  assistant_reasoning = 3,
+  assistant_reasoning_payload = 3,
   assistant_tool_call = 4,
   tool_result = 5,
   inline_compact = 6,
