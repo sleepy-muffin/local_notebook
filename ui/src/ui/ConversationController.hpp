@@ -74,7 +74,7 @@ public:
   void poll();
 
 private:
-  enum class event_kind { text, reasoning, status, done_ok, done_error };
+  enum class event_kind { text, reasoning, status, message_begin, done_ok, done_error };
 
   struct event {
     event_kind kind;

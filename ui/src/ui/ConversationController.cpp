@@ -50,6 +50,10 @@ bool ConversationController::send(std::string text) {
     std::scoped_lock lock(state->mutex);
     state->events.push_back(event{event_kind::status, std::string(delta)});
   };
+  events.on_message_begin = [state]() {
+    std::scoped_lock lock(state->mutex);
+    state->events.push_back(event{event_kind::message_begin, std::string()});
+  };
   events.on_done = [state](bool ok, std::string_view error) {
     std::scoped_lock lock(state->mutex);
     state->events.push_back(
@@ -117,6 +121,14 @@ void ConversationController::poll() {
       case event_kind::status:
         if (on_status_) {
           on_status_(item.text);
+        }
+        break;
+      case event_kind::message_begin:
+        // A new assistant message is starting: rebuild the transcript from the DB
+        // so the previous message stays a separate bubble (its text is already
+        // persisted) and the incoming deltas begin a fresh streaming bubble.
+        if (on_changed_) {
+          on_changed_();
         }
         break;
       case event_kind::done_ok:

@@ -425,6 +425,14 @@ void felis::bell::client::prompt(
       assistant_snapshot.model_,
       caps);
 
+    // Signal the start of this assistant message *before* any of its deltas. A
+    // single turn runs one model call per tool-loop iteration, and each call
+    // streams its own assistant message; without this boundary the UI would
+    // concatenate one message's text directly onto the next (across the tool
+    // calls between them), merging separate replies into a single paragraph
+    // until the turn ended and the DB round-trip split them apart again.
+    if (events.on_message_begin) events.on_message_begin();
+
     // Forward the visible text and hidden reasoning to the caller as they
     // stream. The stop token is observed inside `stream_llm_request`, so `on_text`
     // never has to abort on cancellation here.

@@ -24,11 +24,15 @@ namespace felis::bell {
 //
 // Every hook is optional. `on_text` carries the visible assistant delta;
 // `on_reasoning` the hidden "thinking"; `on_status` a short human status (a tool
-// name, "compacting"); `on_done` fires exactly once with the terminal outcome.
+// name, "compacting"); `on_message_begin` fires once at the start of every
+// assistant message (each tool-loop iteration's model call), before that
+// message's deltas, so the UI can close the previous streaming bubble; `on_done`
+// fires exactly once with the terminal outcome.
 struct prompt_events {
   std::function<void(std::string_view)> on_text;
   std::function<void(std::string_view)> on_reasoning;
   std::function<void(std::string_view)> on_status;
+  std::function<void()> on_message_begin;
   std::function<void(bool ok, std::string_view error)> on_done;
 };
 
