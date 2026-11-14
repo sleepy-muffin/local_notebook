@@ -3,45 +3,26 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
-#include <QDoubleSpinBox>
-#include <QEventLoop>
-#include <QFile>
+#include <QDialogButtonBox>
 #include <QFont>
 #include <QFormLayout>
-#include <QFrame>
-#include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
-#include <QLineEdit>
 #include <QListWidget>
-#include <QMessageBox>
-#include <QPlainTextEdit>
-#include <QProcess>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QShowEvent>
-#include <QSizePolicy>
 #include <QSpinBox>
 #include <QStackedWidget>
-#include <QTimer>
 #include <QVBoxLayout>
-#include <QWidget>
 
-#include <array>
-#include <cstddef>
-#include <memory>
-#include <optional>
 #include <string>
-#include <utility>
 
-#include "local_notebook/core/interface.hpp"
-#include "local_notebook/core/generation_task.hpp"
+#include "client.hpp"
+#include "store.hpp"
 #include "support/i18n.hpp"
 #include "ui/AssistantForm.hpp"
-#include "ui/BackgroundWidget.hpp"
-#include "ui/ScrollBar.hpp"
 #include "ui/SpinBox.hpp"
-#include "ui/SummaryReviewDialog.hpp"
 #include "ui/dialog_style.hpp"
 #include "ui/theme.hpp"
 
@@ -50,90 +31,6 @@ namespace ui {
 using namespace dialog_style;
 
 namespace {
-
-QString rgba(const QColor& color) {
-  return QStringLiteral("rgba(%1, %2, %3, %4)")
-      .arg(color.red())
-      .arg(color.green())
-      .arg(color.blue())
-      .arg(color.alphaF());
-}
-
-// A titled card used by the Account and About pages. Its frame is styled by the
-// window's own scoped sheet (see apply_style), so a theme change reaches it.
-QWidget* make_card(QWidget* parent, const QString& heading) {
-  auto* card = new QFrame(parent);
-  card->setObjectName(QStringLiteral("Card"));
-  card->setAttribute(Qt::WA_StyledBackground, true);
-
-  auto* layout = new QVBoxLayout(card);
-  layout->setContentsMargins(16, 14, 16, 14);
-  layout->setSpacing(4);
-
-  if (!heading.isEmpty()) {
-    auto* label = new QLabel(heading, card);
-    label->setObjectName(QStringLiteral("SectionLabel"));
-    apply_derived_font(label, 0.0, true);
-    layout->addWidget(label);
-    layout->addSpacing(4);
-  }
-
-  return card;
-}
-
-// The vertical body of a card, added to it and returned for filling.
-QVBoxLayout* card_body(QWidget* card) {
-  auto* body = new QWidget(card);
-  auto* layout = new QVBoxLayout(body);
-  layout->setContentsMargins(0, 0, 0, 0);
-  layout->setSpacing(2);
-  static_cast<QVBoxLayout*>(card->layout())->addWidget(body);
-  return layout;
-}
-
-QLabel* value_label(QWidget* parent, const QString& text, bool prominent) {
-  auto* label = new QLabel(text, parent);
-  label->setObjectName(prominent ? QStringLiteral("PageTitle") : QStringLiteral("Muted"));
-  apply_derived_font(label, prominent ? 1.0 : 0.0, prominent);
-  label->setWordWrap(true);
-  return label;
-}
-
-// Reads a bundled license text. It returns an empty string when the resource is
-// missing, so the About page degrades to its short caption rather than failing to
-// build.
-QString read_license(const QString& path) {
-  QFile file(path);
-
-  if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-    return QString();
-  }
-
-  return QString::fromUtf8(file.readAll());
-}
-
-// The verbatim license text. It is a plain, read-only text view rather than a
-// label: the text is shown exactly as shipped, so it is not run through the
-// markdown-ish label styling, and a long license scrolls within a fixed height.
-PlainTextEdit* license_view(QWidget* parent, const QString& text) {
-  auto* view = new PlainTextEdit(text, parent);
-  view->setReadOnly(true);
-  view->setTabChangesFocus(true);
-  view->setMinimumHeight(220);
-  return view;
-}
-
-// Fills a font selector from a stored family. An empty family means "the system
-// default", so the selectors were left untouched at build time; on a reload we
-// resolve it to the application's font, which is what an empty family already
-// behaves as.
-void set_font_box(FontComboBox* box, const std::string& family) {
-  if (!family.empty()) {
-    box->setCurrentFont(QFont(QString::fromStdString(family)));
-  } else {
-    box->setCurrentFont(QApplication::font());
-  }
-}
 
 // Whether the two settings agree on everything the rendered theme depends on.
 // Saving an unrelated field (a budget, a directory) must not trigger a full
@@ -148,101 +45,68 @@ bool theme_inputs_equal(const lnb::Settings& a, const lnb::Settings& b) {
          a.background_override == b.background_override && a.metrics == b.metrics;
 }
 
+// Fills a font selector from a stored family. An empty family means "system
+// default", shown as the application font so the field is never left blank.
+void set_font_box(FontComboBox* box, const std::string& family) {
+  box->setCurrentFont(
+      family.empty() ? QApplication::font() : QFont(QString::fromStdString(family)));
+}
+
+// The family to persist for a selector whose stored value was `original`. When
+// the stored value was empty ("system default") and the user left the selector
+// on the application font, keep it empty rather than baking in a concrete family
+// — for the monospace role that would replace the platform monospace font with a
+// proportional one and break code rendering.
+std::string stored_family(const FontComboBox* box, const std::string& original) {
+  const QString family = box->currentFont().family();
+  if (original.empty() && family == QApplication::font().family()) {
+    return {};
+  }
+  return family.toStdString();
+}
+
 } // namespace
 
 SettingsWindow::SettingsWindow(
-    lnb::core::interface& api, lnb::Settings& settings, QWidget* parent
+    felis::bell::client& api, lnb::Settings& settings, QWidget* parent
 )
-    : QDialog(parent),
-      api_(api),
-      settings_(settings),
-      pending_(settings),
-      pending_metrics_(metrics()) {
+    : QDialog(parent), api_(api), settings_(settings) {
   setObjectName(QStringLiteral("SettingsWindow"));
   setWindowTitle(trs("Settings"));
-  setModal(false);
-  resize(780, 580);
-  setMinimumSize(660, 480);
-  setFont(ui_font());
+  resize(760, 620);
 
-  auto* root = new QVBoxLayout(this);
+  auto* root = new QHBoxLayout(this);
   root->setContentsMargins(0, 0, 0, 0);
   root->setSpacing(0);
 
-  auto* background = new BackgroundWidget(this);
-  root->addWidget(background);
-
-  auto* outer = new QVBoxLayout(background);
-  outer->setContentsMargins(0, 0, 0, 0);
-  outer->setSpacing(0);
-
-  auto* body = new QHBoxLayout();
-  body->setContentsMargins(0, 0, 0, 0);
-  body->setSpacing(0);
-
-  nav_ = new QListWidget(background);
+  nav_ = new QListWidget(this);
   nav_->setObjectName(QStringLiteral("SettingsNav"));
-  // The rail shows the dialog behind it; the rule lives on the list so a style
-  // that paints from the palette cannot fill the scrollbar column black.
-  show_parent_background(nav_);
-  install_scroll_bars(nav_, ScrollBarTrack::Window);
-  nav_->setFrameShape(QFrame::NoFrame);
-  nav_->setSelectionMode(QAbstractItemView::SingleSelection);
-  nav_->setEditTriggers(QAbstractItemView::NoEditTriggers);
-  nav_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-  nav_->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
-  nav_->setFocusPolicy(Qt::NoFocus);
+  nav_->setFixedWidth(180);
   nav_->addItem(trs("Configuration"));
   nav_->addItem(trs("Metrics"));
   nav_->addItem(trs("Assistant"));
-  nav_->addItem(trs("Account"));
   nav_->addItem(trs("About"));
+  root->addWidget(nav_);
 
-  auto* nav_wrap = new QWidget(background);
-  auto* nav_layout = new QVBoxLayout(nav_wrap);
-  nav_layout->setContentsMargins(12, 14, 8, 14);
-  nav_layout->setSpacing(0);
-  nav_layout->addWidget(nav_);
-  nav_wrap->setFixedWidth(188);
+  auto* right = new QVBoxLayout();
+  right->setContentsMargins(20, 20, 20, 16);
+  right->setSpacing(12);
 
-  stack_ = new QStackedWidget(background);
-  stack_->setObjectName(QStringLiteral("SettingsStack"));
-  stack_->setFrameShape(QFrame::NoFrame);
-
+  stack_ = new QStackedWidget(this);
   stack_->addWidget(build_config_page());
   stack_->addWidget(build_metrics_page());
   stack_->addWidget(build_assistant_page());
-  stack_->addWidget(build_account_page());
   stack_->addWidget(build_about_page());
+  right->addWidget(stack_, 1);
 
-  body->addWidget(nav_wrap);
-  body->addWidget(v_separator(background));
-  body->addWidget(stack_, 1);
+  auto* buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, this);
+  buttons->button(QDialogButtonBox::Save)->setObjectName(QStringLiteral("Primary"));
+  buttons->button(QDialogButtonBox::Cancel)->setObjectName(QStringLiteral("Secondary"));
+  connect(buttons, &QDialogButtonBox::accepted, this, [this]() { save(); });
+  connect(buttons, &QDialogButtonBox::rejected, this, [this]() { reject(); });
+  right->addWidget(buttons);
 
-  outer->addLayout(body, 1);
-
-  // A divider above the action row, as requested.
-  outer->addWidget(h_separator(background));
-
-  auto* footer = new QWidget(background);
-  auto* footer_layout = new QHBoxLayout(footer);
-  footer_layout->setContentsMargins(16, 12, 16, 12);
-  footer_layout->setSpacing(8);
-  footer_layout->addStretch(1);
-
-  auto* close_button = new QPushButton(trs("Close"), footer);
-  close_button->setObjectName(QStringLiteral("Secondary"));
-
-  auto* save_button = new QPushButton(trs("Save"), footer);
-  save_button->setObjectName(QStringLiteral("Primary"));
-  save_button->setDefault(true);
-
-  footer_layout->addWidget(close_button);
-  footer_layout->addWidget(save_button);
-
-  outer->addWidget(footer);
-
-  apply_style();
+  root->addLayout(right, 1);
 
   connect(nav_, &QListWidget::currentRowChanged, this, [this](int row) {
     if (row >= 0) {
@@ -251,75 +115,42 @@ SettingsWindow::SettingsWindow(
   });
   nav_->setCurrentRow(0);
 
-  connect(close_button, &QPushButton::clicked, this, [this]() { reject(); });
-  connect(save_button, &QPushButton::clicked, this, [this]() { save(); });
-}
-
-void SettingsWindow::apply_style() {
-  // Scoped chrome plus the navigation's own row states, so the rail reads like
-  // the sidebar session list. The card frame is styled here too (rather than on
-  // the widget) so a theme change reaches every card on the next show.
-  QString sheet = dialog_stylesheet(QStringLiteral("SettingsWindow"));
-  sheet += QStringLiteral(
-               "QFrame#Card { background: %1; border: 1px solid %2; border-radius: 8px; }")
-               .arg(rgba(theme().colors.base), rgba(theme().colors.border));
-  sheet += QStringLiteral(
-               "QListWidget#SettingsNav::item { color: %1; padding: 7px 10px;"
-               " border-radius: 6px; margin: 1px 0; }")
-               .arg(theme().colors.text_muted.name());
-  sheet += QStringLiteral("QListWidget#SettingsNav::item:hover { background: %1; }")
-               .arg(rgba(row_hover_background()));
-  sheet += QStringLiteral("QListWidget#SettingsNav::item:selected { background: %1; color: %2; }")
-               .arg(rgba(row_selected_background()), theme().colors.text.name());
-  sheet += QStringLiteral("QStackedWidget#SettingsStack { background: transparent; }");
-  setStyleSheet(sheet);
-
-  // The derived fonts are set programmatically, so the stylesheet cannot refresh
-  // them: re-derive them from the current base font, which also covers a font
-  // change (not only a theme change).
-  reapply_derived_fonts(this);
-}
-
-void SettingsWindow::set_current_session(std::uint32_t session_id) {
-  current_session_ = session_id;
-  update_account_page();
+  apply_style();
 }
 
 QWidget* SettingsWindow::make_page(
     const QString& title, const QString& subtitle, QWidget* content
 ) {
-  auto* page = new QWidget(stack_);
-  page->setObjectName(QStringLiteral("Page"));
+  auto* page = new QWidget(this);
   auto* layout = new QVBoxLayout(page);
-  layout->setContentsMargins(22, 18, 22, 18);
-  layout->setSpacing(0);
+  layout->setContentsMargins(0, 0, 0, 0);
+  layout->setSpacing(12);
 
   auto* heading = new QLabel(title, page);
   heading->setObjectName(QStringLiteral("PageTitle"));
-  apply_derived_font(heading, 4.0, true);
-
-  auto* sub = new QLabel(subtitle, page);
-  sub->setObjectName(QStringLiteral("PageSubtitle"));
-
+  apply_derived_font(heading, 1.0, true);
   layout->addWidget(heading);
-  layout->addWidget(sub);
-  layout->addSpacing(14);
+
+  if (!subtitle.isEmpty()) {
+    auto* sub = new QLabel(subtitle, page);
+    sub->setObjectName(QStringLiteral("PageSubtitle"));
+    sub->setWordWrap(true);
+    layout->addWidget(sub);
+  }
 
   auto* scroll = new QScrollArea(page);
   scroll->setWidgetResizable(true);
   scroll->setFrameShape(QFrame::NoFrame);
-  scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-  install_scroll_bars(scroll, ScrollBarTrack::Window);
   scroll->setWidget(content);
-
   layout->addWidget(scroll, 1);
+
   return page;
 }
 
 QWidget* SettingsWindow::build_config_page() {
-  auto* content = new QWidget();
+  auto* content = new QWidget(this);
   auto* layout = new QVBoxLayout(content);
-  layout->setContentsMargins(0, 0, 12, 0);
+  layout->setContentsMargins(0, 0, 0, 0);
   layout->setSpacing(12);
 
   // ---- Appearance ----
@@ -327,123 +158,65 @@ QWidget* SettingsWindow::build_config_page() {
   {
     auto* form = form_layout(content);
 
-    auto* language_box = new ComboBox(content);
-    for (const lnb::i18n::Language language : lnb::i18n::kLanguages) {
-      language_box->addItem(lnb::i18n::language_name(language), static_cast<int>(language));
+    theme_ = new ComboBox(content);
+    for (const QString& name: theme_names()) {
+      theme_->addItem(name);
     }
-    {
-      const int index = language_box->findData(
-          static_cast<int>(lnb::i18n::language_from_code(pending_.language))
-      );
-      if (index >= 0) {
-        language_box->setCurrentIndex(index);
-      }
-    }
-    form->addRow(field_label(content, trs("Language")), language_box);
-    config_writers_.push_back([this, language_box]() {
-      pending_.language = std::string(lnb::i18n::code_from_language(
-          static_cast<lnb::i18n::Language>(language_box->currentData().toInt())
-      ));
-    });
-    config_reloaders_.push_back([this, language_box]() {
-      const int index = language_box->findData(
-          static_cast<int>(lnb::i18n::language_from_code(pending_.language))
-      );
-      if (index >= 0) {
-        language_box->setCurrentIndex(index);
-      }
-    });
 
-    auto* theme_box = new ComboBox(content);
-    theme_box->addItems(theme_names());
-    const int theme_index = theme_box->findText(QString::fromStdString(pending_.theme));
-    if (theme_index >= 0) {
-      theme_box->setCurrentIndex(theme_index);
-    }
-    form->addRow(field_label(content, trs("Theme")), theme_box);
-    config_writers_.push_back([this, theme_box]() {
-      pending_.theme = theme_box->currentText().toStdString();
-    });
-    config_reloaders_.push_back([this, theme_box]() {
-      const int index = theme_box->findText(QString::fromStdString(pending_.theme));
-      if (index >= 0) {
-        theme_box->setCurrentIndex(index);
-      }
-    });
+    language_ = new ComboBox(content);
+    language_->addItem(QStringLiteral("English"), QStringLiteral("en"));
+    language_->addItem(QStringLiteral("\u4e2d\u6587"), QStringLiteral("zh"));
+    language_->addItem(QStringLiteral("\u65e5\u672c\u8a9e"), QStringLiteral("ja"));
 
-    auto* ui_font_box = new FontComboBox(content);
-    if (!pending_.ui_font.empty()) {
-      ui_font_box->setCurrentFont(QFont(QString::fromStdString(pending_.ui_font)));
-    }
-    auto* ui_font_size = new SpinBox(content);
-    ui_font_size->setRange(6, 48);
-    ui_font_size->setValue(pending_.ui_font_size);
-    form->addRow(field_label(content, trs("Interface font")), ui_font_box);
-    form->addRow(field_label(content, trs("Interface size")), ui_font_size);
-    config_writers_.push_back([this, ui_font_box]() {
-      pending_.ui_font = ui_font_box->currentFont().family().toStdString();
-    });
-    config_writers_.push_back([this, ui_font_size]() {
-      pending_.ui_font_size = ui_font_size->value();
-    });
-    config_reloaders_.push_back([this, ui_font_box]() { set_font_box(ui_font_box, pending_.ui_font); });
-    config_reloaders_.push_back([this, ui_font_size]() {
-      ui_font_size->setValue(pending_.ui_font_size);
-    });
+    form->addRow(field_label(content, trs("Theme")), theme_);
+    form->addRow(field_label(content, trs("Language")), language_);
 
-    auto* font_box = new FontComboBox(content);
-    if (!pending_.font.empty()) {
-      font_box->setCurrentFont(QFont(QString::fromStdString(pending_.font)));
-    }
-    auto* font_size = new SpinBox(content);
-    font_size->setRange(6, 48);
-    font_size->setValue(pending_.font_size);
-    form->addRow(field_label(content, trs("Chat font")), font_box);
-    form->addRow(field_label(content, trs("Chat size")), font_size);
-    config_writers_.push_back([this, font_box]() {
-      pending_.font = font_box->currentFont().family().toStdString();
-    });
-    config_writers_.push_back([this, font_size]() {
-      pending_.font_size = font_size->value();
-    });
-    config_reloaders_.push_back([this, font_box]() { set_font_box(font_box, pending_.font); });
-    config_reloaders_.push_back([this, font_size]() { font_size->setValue(pending_.font_size); });
+    layout->addLayout(form);
+  }
 
-    auto* mono_box = new FontComboBox(content);
-    if (!pending_.mono_font.empty()) {
-      mono_box->setCurrentFont(QFont(QString::fromStdString(pending_.mono_font)));
-    }
-    auto* mono_size = new SpinBox(content);
-    mono_size->setRange(6, 48);
-    mono_size->setValue(pending_.mono_font_size);
-    form->addRow(field_label(content, trs("Monospace font")), mono_box);
-    form->addRow(field_label(content, trs("Monospace size")), mono_size);
-    config_writers_.push_back([this, mono_box]() {
-      pending_.mono_font = mono_box->currentFont().family().toStdString();
-    });
-    config_writers_.push_back([this, mono_size]() {
-      pending_.mono_font_size = mono_size->value();
-    });
-    config_reloaders_.push_back([this, mono_box]() { set_font_box(mono_box, pending_.mono_font); });
-    config_reloaders_.push_back([this, mono_size]() {
-      mono_size->setValue(pending_.mono_font_size);
-    });
+  layout->addWidget(h_separator(content));
 
-    auto* inline_scale = new DoubleSpinBox(content);
-    inline_scale->setRange(0.50, 1.50);
-    inline_scale->setSingleStep(0.05);
-    inline_scale->setDecimals(2);
-    inline_scale->setValue(static_cast<double>(pending_.inline_code_scale));
-    inline_scale->setToolTip(
+  // ---- Typography ----
+  // Interface (every widget), chat (transcript + composer) and monospace (code)
+  // families each pair a selector with a point size; inline code is scaled from
+  // the chat font so it never looks oversized next to the prose.
+  layout->addWidget(section_label(content, trs("Typography")));
+  {
+    auto* form = form_layout(content);
+
+    // A point-size spin box: unlike make_spin()'s budget range, this is a small
+    // 6..48 pt range stepping by one.
+    const auto make_size = [content](int value) {
+      auto* spin = new SpinBox(content);
+      spin->setRange(6, 48);
+      spin->setSingleStep(1);
+      spin->setValue(value);
+      return spin;
+    };
+
+    ui_font_ = new FontComboBox(content);
+    ui_font_size_ = make_size(settings_.ui_font_size);
+    font_ = new FontComboBox(content);
+    font_size_ = make_size(settings_.font_size);
+    mono_font_ = new FontComboBox(content);
+    mono_font_size_ = make_size(settings_.mono_font_size);
+
+    inline_code_scale_ = new DoubleSpinBox(content);
+    inline_code_scale_->setRange(0.50, 1.50);
+    inline_code_scale_->setSingleStep(0.05);
+    inline_code_scale_->setDecimals(2);
+    inline_code_scale_->setValue(static_cast<double>(settings_.inline_code_scale));
+    inline_code_scale_->setToolTip(
         trs("Inline code size as a fraction of the surrounding text.")
     );
-    form->addRow(field_label(content, trs("Inline code size")), inline_scale);
-    config_writers_.push_back([this, inline_scale]() {
-      pending_.inline_code_scale = static_cast<float>(inline_scale->value());
-    });
-    config_reloaders_.push_back([this, inline_scale]() {
-      inline_scale->setValue(static_cast<double>(pending_.inline_code_scale));
-    });
+
+    form->addRow(field_label(content, trs("Interface font")), ui_font_);
+    form->addRow(field_label(content, trs("Interface size")), ui_font_size_);
+    form->addRow(field_label(content, trs("Chat font")), font_);
+    form->addRow(field_label(content, trs("Chat size")), font_size_);
+    form->addRow(field_label(content, trs("Monospace font")), mono_font_);
+    form->addRow(field_label(content, trs("Monospace size")), mono_font_size_);
+    form->addRow(field_label(content, trs("Inline code size")), inline_code_scale_);
 
     layout->addLayout(form);
   }
@@ -453,663 +226,270 @@ QWidget* SettingsWindow::build_config_page() {
   // ---- Composer ----
   layout->addWidget(section_label(content, trs("Composer")));
   {
-    auto* send_check = new QCheckBox(trs("Send with Ctrl+Enter"), content);
-    send_check->setToolTip(
-        trs("When on, Ctrl+Enter sends and Enter inserts a new line.")
-    );
-    send_check->setChecked(pending_.enter_with_modifier);
-    layout->addWidget(send_check);
-    config_writers_.push_back([this, send_check]() {
-      pending_.enter_with_modifier = send_check->isChecked();
-    });
-    config_reloaders_.push_back([this, send_check]() {
-      send_check->setChecked(pending_.enter_with_modifier);
-    });
-  }
-
-  layout->addWidget(h_separator(content));
-
-  // ---- Transcript ----
-  layout->addWidget(section_label(content, trs("Transcript")));
-  {
     auto* form = form_layout(content);
 
-    auto* rendered = new SpinBox(content);
-    rendered->setObjectName(QStringLiteral("RenderedMessages"));
-    rendered->setRange(1, 100000);
-    rendered->setValue(pending_.rendered_message_limit);
-    form->addRow(field_label(content, trs("Rendered messages")), rendered);
-    config_writers_.push_back([this, rendered]() {
-      pending_.rendered_message_limit = rendered->value();
-    });
-    config_reloaders_.push_back([this, rendered]() {
-      rendered->setValue(pending_.rendered_message_limit);
-    });
+    enter_modifier_ = new QCheckBox(trs("Ctrl+Enter sends; Enter inserts a newline"), content);
 
-    auto* page_size = new SpinBox(content);
-    page_size->setRange(1, 100000);
-    page_size->setValue(pending_.history_page_size);
-    form->addRow(field_label(content, trs("History page size")), page_size);
-    config_writers_.push_back([this, page_size]() {
-      pending_.history_page_size = page_size->value();
-    });
-    config_reloaders_.push_back([this, page_size]() {
-      page_size->setValue(pending_.history_page_size);
-    });
+    rendered_limit_ = make_spin(content, 20);
+    rendered_limit_->setRange(1, 10000);
+    history_page_ = make_spin(content, 20);
+    history_page_->setRange(1, 10000);
+
+    form->addRow(QString(), enter_modifier_);
+    form->addRow(field_label(content, trs("Rendered messages")), rendered_limit_);
+    form->addRow(field_label(content, trs("History page size")), history_page_);
 
     layout->addLayout(form);
   }
 
   layout->addWidget(h_separator(content));
 
-  // ---- Background ----
-  layout->addWidget(section_label(content, trs("Background")));
+  // ---- Startup ----
+  // Auto-login is what skips the picker at launch. Because turning it on hides
+  // the picker — the only other place to change it — it must also be reachable
+  // here so it can be switched back off without editing settings.json by hand.
+  layout->addWidget(section_label(content, trs("Startup")));
   {
-    auto* form = form_layout(content);
-
-    auto* url = new QLineEdit(content);
-    if (pending_.background_url.has_value()) {
-      url->setText(QString::fromStdString(*pending_.background_url));
-    }
-    url->setPlaceholderText(trs("Path to a background image (optional)"));
-    form->addRow(field_label(content, trs("Image")), url);
-    config_writers_.push_back([this, url]() {
-      const QString text = url->text().trimmed();
-      pending_.background_url =
-          text.isEmpty() ? std::nullopt : std::optional<std::string>(text.toStdString());
-    });
-    config_reloaders_.push_back([this, url]() {
-      url->setText(
-          pending_.background_url.has_value()
-              ? QString::fromStdString(*pending_.background_url)
-              : QString()
-      );
-    });
-
-    layout->addLayout(form);
-
-    auto* tint_check = new QCheckBox(trs("Tint the image"), content);
-    tint_check->setChecked(pending_.background_override.has_value());
-    layout->addWidget(tint_check);
-
-    const std::array<float, 4> initial = pending_.background_override.value_or(
-        std::array<float, 4>{0.094f, 0.098f, 0.149f, 0.85f}
+    auto_login_ = new QCheckBox(
+        trs("Open the current assistant automatically on next launch"), content
     );
-
-    auto* channels = new QGridLayout();
-    channels->setHorizontalSpacing(12);
-    channels->setVerticalSpacing(8);
-    const char* names[] = {"R", "G", "B", "A"};
-    std::array<QDoubleSpinBox*, 4> spins{};
-
-    // Two channels per row: a single row of four fields is the widest content on
-    // any settings page, and would push the page past its viewport on platforms
-    // with wide font metrics.
-    for (int i = 0; i < 4; ++i) {
-      auto* spin = new DoubleSpinBox(content);
-      spin->setRange(0.0, 1.0);
-      spin->setSingleStep(0.05);
-      spin->setDecimals(2);
-      spin->setMinimumWidth(64);
-      spin->setValue(static_cast<double>(initial[static_cast<std::size_t>(i)]));
-      spins[static_cast<std::size_t>(i)] = spin;
-
-      const int row = i / 2;
-      const int column = i % 2;
-      channels->addWidget(new QLabel(QString::fromUtf8(names[i]), content), row, column * 2);
-      channels->addWidget(spin, row, column * 2 + 1);
-    }
-    channels->setColumnStretch(4, 1);
-    layout->addLayout(channels);
-
-    config_writers_.push_back([this, tint_check, spins]() {
-      if (!tint_check->isChecked()) {
-        pending_.background_override = std::nullopt;
-        return;
-      }
-
-      pending_.background_override = std::array<float, 4>{
-          static_cast<float>(spins[0]->value()),
-          static_cast<float>(spins[1]->value()),
-          static_cast<float>(spins[2]->value()),
-          static_cast<float>(spins[3]->value()),
-      };
-    });
-    config_reloaders_.push_back([this, tint_check, spins]() {
-      const std::array<float, 4> values = pending_.background_override.value_or(
-          std::array<float, 4>{0.094f, 0.098f, 0.149f, 0.85f}
-      );
-      tint_check->setChecked(pending_.background_override.has_value());
-
-      for (int i = 0; i < 4; ++i) {
-        spins[static_cast<std::size_t>(i)]->setValue(
-            static_cast<double>(values[static_cast<std::size_t>(i)])
-        );
-      }
-    });
-  }
-
-  // ---- Restore ----
-  {
-    auto* actions = new QHBoxLayout();
-    actions->setSpacing(8);
-    actions->addStretch(1);
-
-    auto* restore = new QPushButton(trs("Restore to defaults"), content);
-    restore->setObjectName(QStringLiteral("RestoreConfig"));
-    restore->setToolTip(
-        trs("Reset this page's fields to their shipped defaults. Nothing is "
-            "saved until you press Save.")
+    auto_login_->setToolTip(
+        trs("When off, the assistant picker is shown at every launch.")
     );
-    actions->addWidget(restore);
-    layout->addLayout(actions);
-
-    connect(restore, &QPushButton::clicked, this, [this]() { restore_config_defaults(); });
+    layout->addWidget(auto_login_);
   }
 
   layout->addStretch(1);
 
   return make_page(
-      trs("Configuration"),
-      trs("Application-wide options stored in data/settings.json."), content
-  );
+      trs("Configuration"), trs("Appearance and startup behaviour for the whole app."),
+      content);
 }
 
 QWidget* SettingsWindow::build_metrics_page() {
-  auto* content = new QWidget();
+  auto* content = new QWidget(this);
   auto* layout = new QVBoxLayout(content);
-  layout->setContentsMargins(0, 0, 12, 0);
+  layout->setContentsMargins(0, 0, 0, 0);
   layout->setSpacing(12);
 
-  layout->addWidget(section_label(content, trs("Layout")));
-
-  // One field per row, as on every other settings page: a two-column grid was the
-  // widest content in the window and could push the page past its viewport on
-  // platforms whose font metrics are wider than the developer's.
-  auto* form = form_layout(content);
-
-  const auto add_metric = [&](
-                              const QString& label, int value, int minimum, int maximum,
-                              int step, int lnb::ThemeMetrics::*field
+  // Registers one spin box for a ThemeMetrics field. The value is filled in by
+  // reload_metrics(); save() reads the boxes back into settings_.metrics.
+  const auto add_metric = [this, content](
+                              QFormLayout* target, const QString& label, int minimum,
+                              int maximum, int step, int lnb::ThemeMetrics::*field
                           ) {
-    auto* spin = new SpinBox(content);
+    QSpinBox* spin = make_spin(content, 0);
     spin->setRange(minimum, maximum);
     spin->setSingleStep(step);
-    spin->setValue(value);
     spin->setMinimumWidth(76);
-    spin->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    form->addRow(field_label(content, label), spin);
-    metric_writers_.push_back([this, spin, field]() { pending_metrics_.*field = spin->value(); });
-    metric_reloaders_.push_back([this, spin, field]() { spin->setValue(pending_metrics_.*field); });
+    target->addRow(field_label(content, label), spin);
+    metric_fields_.emplace_back(spin, field);
   };
 
+  layout->addWidget(section_label(content, trs("Layout")));
+  auto* form = form_layout(content);
+
+  add_metric(form, trs("Sidebar width"), 120, 800, 4, &lnb::ThemeMetrics::sidebar_width);
+  add_metric(form, trs("Task list width"), 160, 800, 4, &lnb::ThemeMetrics::tasks_list_width);
+  add_metric(form, trs("Page margin"), 0, 200, 1, &lnb::ThemeMetrics::page_margin);
+  add_metric(form, trs("Message spacing"), 0, 200, 1, &lnb::ThemeMetrics::message_spacing);
+  add_metric(form, trs("Composer height"), 32, 400, 2, &lnb::ThemeMetrics::composer_height);
   add_metric(
-      trs("Sidebar width"), pending_metrics_.sidebar_width, 120, 800, 4,
-      &lnb::ThemeMetrics::sidebar_width
-  );
+      form, trs("Expanded height"), 32, 800, 2, &lnb::ThemeMetrics::composer_height_expanded);
   add_metric(
-      trs("Task list width"), pending_metrics_.tasks_list_width, 160, 800, 4,
-      &lnb::ThemeMetrics::tasks_list_width
-  );
-  add_metric(
-      trs("Page margin"), pending_metrics_.page_margin, 0, 200, 1,
-      &lnb::ThemeMetrics::page_margin
-  );
-  add_metric(
-      trs("Message spacing"), pending_metrics_.message_spacing, 0, 200, 1,
-      &lnb::ThemeMetrics::message_spacing
-  );
-  add_metric(
-      trs("Composer height"), pending_metrics_.composer_height, 32, 400, 2,
-      &lnb::ThemeMetrics::composer_height
-  );
-  add_metric(
-      trs("Expanded height"), pending_metrics_.composer_height_expanded, 32, 800, 2,
-      &lnb::ThemeMetrics::composer_height_expanded
-  );
-  add_metric(
-      trs("Session item height"), pending_metrics_.session_item_height, 20, 120, 2,
-      &lnb::ThemeMetrics::session_item_height
-  );
-  add_metric(
-      trs("Title font size"), pending_metrics_.title_font_size, 6, 48, 1,
-      &lnb::ThemeMetrics::title_font_size
-  );
-  add_metric(
-      trs("Flow max width"), pending_metrics_.message_max_width, 0, 4000, 10,
-      &lnb::ThemeMetrics::message_max_width
-  );
-  add_metric(
-      trs("Bubble radius"), pending_metrics_.bubble_radius, 0, 40, 1,
-      &lnb::ThemeMetrics::bubble_radius
-  );
+      form, trs("Session item height"), 20, 120, 2, &lnb::ThemeMetrics::session_item_height);
+  add_metric(form, trs("Title font size"), 6, 48, 1, &lnb::ThemeMetrics::title_font_size);
+  add_metric(form, trs("Flow max width"), 0, 4000, 10, &lnb::ThemeMetrics::message_max_width);
+  add_metric(form, trs("Bubble radius"), 0, 40, 1, &lnb::ThemeMetrics::bubble_radius);
 
   layout->addLayout(form);
   layout->addWidget(h_separator(content));
 
   layout->addWidget(section_label(content, trs("Reading rhythm")));
-  layout->addWidget(value_label(
-      content, trs("Line heights are percentages (100 is single spacing)."), false
-  ));
+  auto* hint = new QLabel(trs("Line heights are percentages (100 is single spacing)."), content);
+  hint->setObjectName(QStringLiteral("Muted"));
+  hint->setWordWrap(true);
+  layout->addWidget(hint);
 
   auto* rhythm = form_layout(content);
-
-  const auto add_rhythm = [&](
-                              const QString& label, int value, int minimum, int maximum,
-                              int step, int lnb::ThemeMetrics::*field
-                          ) {
-    auto* spin = new SpinBox(content);
-    spin->setRange(minimum, maximum);
-    spin->setSingleStep(step);
-    spin->setValue(value);
-    spin->setMinimumWidth(76);
-    spin->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    rhythm->addRow(field_label(content, label), spin);
-    metric_writers_.push_back([this, spin, field]() { pending_metrics_.*field = spin->value(); });
-    metric_reloaders_.push_back([this, spin, field]() { spin->setValue(pending_metrics_.*field); });
-  };
-
-  add_rhythm(
-      trs("Assistant line height"), pending_metrics_.line_height_other, 80, 300, 5,
-      &lnb::ThemeMetrics::line_height_other
-  );
-  add_rhythm(
-      trs("User line height"), pending_metrics_.line_height_self, 80, 300, 5,
-      &lnb::ThemeMetrics::line_height_self
-  );
-  add_rhythm(
-      trs("Paragraph spacing"), pending_metrics_.paragraph_spacing, 0, 80, 1,
-      &lnb::ThemeMetrics::paragraph_spacing
-  );
-  add_rhythm(
-      trs("List spacing"), pending_metrics_.list_paragraph_spacing, 0, 80, 1,
-      &lnb::ThemeMetrics::list_paragraph_spacing
-  );
-
+  add_metric(
+      rhythm, trs("Assistant line height"), 80, 300, 5, &lnb::ThemeMetrics::line_height_other);
+  add_metric(
+      rhythm, trs("User line height"), 80, 300, 5, &lnb::ThemeMetrics::line_height_self);
+  add_metric(
+      rhythm, trs("Paragraph spacing"), 0, 80, 1, &lnb::ThemeMetrics::paragraph_spacing);
+  add_metric(
+      rhythm, trs("List spacing"), 0, 80, 1, &lnb::ThemeMetrics::list_paragraph_spacing);
   layout->addLayout(rhythm);
 
-  // ---- Restore ----
   {
     auto* actions = new QHBoxLayout();
     actions->setSpacing(8);
     actions->addStretch(1);
 
     auto* restore = new QPushButton(trs("Restore to defaults"), content);
-    restore->setObjectName(QStringLiteral("RestoreMetrics"));
-    restore->setToolTip(
-        trs("Reset these metrics to the current theme's own defaults. Nothing "
-            "is saved until you press Save.")
-    );
+    restore->setObjectName(QStringLiteral("Secondary"));
+    restore->setToolTip(trs(
+        "Reset these metrics to the current theme's own defaults. Nothing is "
+        "saved until you press Save."
+    ));
+    connect(restore, &QPushButton::clicked, this, [this]() { restore_metrics_defaults(); });
     actions->addWidget(restore);
     layout->addLayout(actions);
-
-    connect(restore, &QPushButton::clicked, this, [this]() { restore_metrics_defaults(); });
   }
 
   layout->addStretch(1);
 
   return make_page(
-      trs("Metrics"), trs("Sizing and spacing of the interface."), content
-  );
+      trs("Metrics"), trs("Sizing and spacing of the interface."), content);
 }
 
 QWidget* SettingsWindow::build_assistant_page() {
-  auto* content = new QWidget();
+  auto* content = new QWidget(this);
   auto* layout = new QVBoxLayout(content);
-  // The form brings its own right margin, so this stays flush.
   layout->setContentsMargins(0, 0, 0, 0);
   layout->setSpacing(12);
 
   assistant_form_ = new AssistantForm(content);
-  if (const auto assistant = api_.assistant()) {
-    assistant_form_->set_assistant(*assistant);
-  }
   layout->addWidget(assistant_form_);
 
-  // ---- Assistant memory ----
-  // A sibling of the form, matching its right margin so the two sections align.
-  auto* memory_block = new QWidget(content);
-  auto* memory_layout = new QVBoxLayout(memory_block);
-  memory_layout->setContentsMargins(0, 0, 12, 0);
-  memory_layout->setSpacing(12);
-
-  memory_layout->addWidget(h_separator(memory_block));
-
-  auto* memory_header = new QHBoxLayout();
-  memory_header->setSpacing(8);
-  memory_header->addWidget(section_label(memory_block, trs("Assistant memory")));
-  memory_header->addStretch(1);
-
-  assistant_summarize_ = new QPushButton(trs("Update memory now"), memory_block);
-  assistant_summarize_->setObjectName(QStringLiteral("Secondary"));
-  assistant_summarize_->setToolTip(
-      trs(
-          "Merge the recent messages of every session into the memory below, "
-          "ignoring the automatic memory trigger. Idempotent: pressing it again "
-          "with no new messages changes nothing."
-      )
-  );
-  memory_header->addWidget(assistant_summarize_);
-  memory_layout->addLayout(memory_header);
-
-  assistant_memory_ = new PlainTextEdit(memory_block);
-  assistant_memory_->setTabChangesFocus(true);
-  assistant_memory_->setMinimumHeight(160);
-  assistant_memory_->setPlaceholderText(
-    trs(
-      "Automatically maintained record shared across every session. Edit to "
-      "correct it, or clear it to rebuild it from the transcript."
-    )
-  );
-  if (const auto assistant = api_.assistant()) {
-    assistant_memory_->setPlainText(to_qstring(assistant->memory_));
-  }
-  memory_layout->addWidget(assistant_memory_);
-
-  auto* docs = new QLabel(memory_block);
-  docs->setObjectName(QStringLiteral("Muted"));
-  docs->setWordWrap(true);
-  docs->setTextFormat(Qt::RichText);
-  QSizePolicy docs_policy(QSizePolicy::Preferred, QSizePolicy::Minimum);
-  docs_policy.setHeightForWidth(true);
-  docs->setSizePolicy(docs_policy);
-  docs->setText(trs(
-      "<b>How assistant memory works</b><br>"
-      "This memory is shared across every session of the assistant. It is merged from "
-      "the recent messages of all sessions (bounded by <i>Trigger tokens</i>) together "
-      "with each session's own summarization (bounded by <i>Session pool</i>). Older "
-      "sessions may therefore be forgotten.<br><br>"
-      "<b>Update memory now</b> ignores the automatic trigger and merges on demand. It "
-      "is idempotent: running it again with no new messages reads the same set and "
-      "produces the same memory. Custom instructions are kept separate and are never "
-      "touched."
-  ));
-  memory_layout->addWidget(docs);
-
-  layout->addWidget(memory_block);
-  // Keep the form and memory blocks at their natural height instead of letting the
-  // form's own trailing stretch absorb the extra space.
+  layout->addWidget(section_label(content, trs("Assistant memory")));
+  assistant_memory_ = new PlainTextEdit(content);
+  assistant_memory_->setMinimumHeight(120);
+  layout->addWidget(assistant_memory_);
   layout->addStretch(1);
 
-  connect(assistant_summarize_, &QPushButton::clicked, this, [this]() {
-    summarize_assistant_now();
-  });
-
   return make_page(
-      trs("Assistant"),
-      trs("The assistant open in this window. It is fixed for this run, "
-          "but its configuration and memory can be edited here."),
-      content
-  );
-}
-
-QWidget* SettingsWindow::build_account_page() {
-  auto* content = new QWidget();
-  auto* layout = new QVBoxLayout(content);
-  layout->setContentsMargins(0, 0, 12, 0);
-  layout->setSpacing(12);
-
-  auto* session_card = make_card(content, trs("Current session"));
-  {
-    QVBoxLayout* body = card_body(session_card);
-    account_session_name_ = value_label(session_card, QString(), true);
-    account_session_id_ = value_label(session_card, QString(), false);
-    body->addWidget(account_session_name_);
-    body->addWidget(account_session_id_);
-  }
-  layout->addWidget(session_card);
-
-  auto* startup_card = make_card(content, trs("Startup"));
-  {
-    QVBoxLayout* body = card_body(startup_card);
-
-    auto* auto_login = new QCheckBox(
-        trs("Open at startup"), startup_card
-    );
-    auto_login->setObjectName(QStringLiteral("AutoLogin"));
-    auto_login->setToolTip(
-        trs("Open this assistant automatically at startup. When off, the "
-            "assistant picker is shown every time.")
-    );
-    auto_login->setChecked(pending_.auto_login);
-    body->addWidget(auto_login);
-
-    config_writers_.push_back([this, auto_login]() {
-      pending_.auto_login = auto_login->isChecked();
-    });
-    config_reloaders_.push_back([this, auto_login]() {
-      auto_login->setChecked(pending_.auto_login);
-    });
-  }
-  layout->addWidget(startup_card);
-
-  layout->addStretch(1);
-
-  update_account_page();
-
-  return make_page(
-      trs("Account"),
-      trs("The session you are in, and how the app starts."),
-      content
-  );
+      trs("Assistant"), trs("Configuration of the open assistant."), content);
 }
 
 QWidget* SettingsWindow::build_about_page() {
-  auto* content = new QWidget();
+  auto* content = new QWidget(this);
   auto* layout = new QVBoxLayout(content);
-  layout->setContentsMargins(0, 0, 12, 0);
-  layout->setSpacing(12);
+  layout->setContentsMargins(0, 0, 0, 0);
+  layout->setSpacing(8);
 
-  auto* card = make_card(content, QString());
-  {
-    QVBoxLayout* body = card_body(card);
-
-    auto* name = value_label(card, QStringLiteral("Local Notebook"), true);
-    apply_derived_font(name, 6.0, true);
-    body->addWidget(name);
-    body->addSpacing(2);
-
-    body->addWidget(value_label(
-        card, trs("A local, assistant-backed notebook."), false
-    ));
-    body->addSpacing(10);
-
-    body->addWidget(value_label(
-        card, trs("Version %1").arg(QApplication::applicationVersion()), false
-    ));
-    body->addWidget(value_label(
-        card, trs("Built with Qt %1").arg(QString::fromUtf8(qVersion())), false
-    ));
-  }
-  layout->addWidget(card);
-
-  auto* mit = make_card(content, trs("License"));
-  {
-    QVBoxLayout* body = card_body(mit);
-    body->addWidget(value_label(
-        mit, trs("Local Notebook is distributed under the MIT License."), false
-    ));
-    body->addSpacing(6);
-    body->addWidget(license_view(mit, read_license(QStringLiteral(":/licenses/mit.txt"))));
-  }
-  layout->addWidget(mit);
-
-  auto* qt = make_card(content, trs("Qt License"));
-  {
-    QVBoxLayout* body = card_body(qt);
-    body->addWidget(value_label(
-        qt,
-        trs("Built with the community edition of Qt, used under the terms of the "
-            "GNU Lesser General Public License, version 3."),
-        false
-    ));
-    body->addSpacing(6);
-    body->addWidget(
-        license_view(qt, read_license(QStringLiteral(":/licenses/lgpl-3.0.txt")))
-    );
-  }
-  layout->addWidget(qt);
-
+  auto* body = new QLabel(
+      trs("Local Notebook\nA local-first notebook for chat assistants."), content);
+  body->setWordWrap(true);
+  layout->addWidget(body);
   layout->addStretch(1);
 
-  return make_page(trs("About"), trs("Program information."), content);
+  return make_page(trs("About"), QString(), content);
 }
 
-void SettingsWindow::update_account_page() {
-  if (account_session_name_ == nullptr) {
-    return;
-  }
-
-  const auto session = api_.session(current_session_);
-
-  if (!session.has_value()) {
-    account_session_name_->setText(trs("No session selected"));
-    account_session_id_->clear();
-    return;
-  }
-
-  account_session_name_->setText(
-      session->title_.empty() ? trs("New Session") : to_qstring(session->title_)
-  );
-  account_session_id_->setText(trs("Session #%1").arg(session->id_));
-}
-
-void SettingsWindow::write_config() {
-  for (const auto& writer : config_writers_) {
-    writer();
-  }
-}
-
-void SettingsWindow::write_metrics() {
-  for (const auto& writer : metric_writers_) {
-    writer();
-  }
+void SettingsWindow::apply_style() {
+  setStyleSheet(dialog_stylesheet(QStringLiteral("SettingsWindow")));
 }
 
 void SettingsWindow::showEvent(QShowEvent* event) {
   QDialog::showEvent(event);
-
-  // Rebuild the scoped sheet first: the theme may have changed since the last
-  // visit, and the dialog's own controls would otherwise keep the colours they
-  // were built with.
   apply_style();
-
-  // A cancelled edit must not survive into the next visit, so every open starts
-  // from the stored state rather than from whatever was left in the widgets.
   reload_from_app();
 }
 
 void SettingsWindow::reload_from_app() {
-  pending_ = settings_;
-  pending_metrics_ = metrics();
-
-  for (const auto& reload : config_reloaders_) {
-    reload();
+  const int theme_index = theme_->findText(to_qstring(settings_.theme));
+  if (theme_index >= 0) {
+    theme_->setCurrentIndex(theme_index);
   }
 
-  for (const auto& reload : metric_reloaders_) {
-    reload();
+  const int lang_index = language_->findData(to_qstring(settings_.language));
+  if (lang_index >= 0) {
+    language_->setCurrentIndex(lang_index);
   }
 
-  if (const auto assistant = api_.assistant()) {
-    if (assistant_form_ != nullptr) {
-      assistant_form_->set_assistant(*assistant);
-    }
-    if (assistant_memory_ != nullptr) {
-      assistant_memory_->setPlainText(to_qstring(assistant->memory_));
-    }
+  enter_modifier_->setChecked(settings_.enter_with_modifier);
+  rendered_limit_->setValue(settings_.rendered_message_limit);
+  history_page_->setValue(settings_.history_page_size);
+  auto_login_->setChecked(settings_.auto_login);
+
+  set_font_box(ui_font_, settings_.ui_font);
+  ui_font_size_->setValue(settings_.ui_font_size);
+  set_font_box(font_, settings_.font);
+  font_size_->setValue(settings_.font_size);
+  set_font_box(mono_font_, settings_.mono_font);
+  mono_font_size_->setValue(settings_.mono_font_size);
+  inline_code_scale_->setValue(static_cast<double>(settings_.inline_code_scale));
+
+  if (assistant_form_ != nullptr) {
+    assistant_form_->set_assistant(api_.current_assistant());
+  }
+  if (assistant_memory_ != nullptr) {
+    assistant_memory_->setPlainText(to_qstring(api_.current_assistant().memory_));
   }
 
-  update_account_page();
+  reload_metrics();
 }
 
-void SettingsWindow::restore_config_defaults() {
-  // Only the fields this page shows are reset; the settings that live elsewhere
-  // (last assistant, geometry, metrics) are left untouched, so a later Save does
-  // not clobber them.
-  const lnb::Settings defaults;
-
-  pending_.theme = defaults.theme;
-  pending_.language = lnb::default_language_code();
-  pending_.ui_font = defaults.ui_font;
-  pending_.ui_font_size = defaults.ui_font_size;
-  pending_.font = defaults.font;
-  pending_.font_size = defaults.font_size;
-  pending_.mono_font = defaults.mono_font;
-  pending_.mono_font_size = defaults.mono_font_size;
-  pending_.inline_code_scale = defaults.inline_code_scale;
-  pending_.enter_with_modifier = defaults.enter_with_modifier;
-  pending_.rendered_message_limit = defaults.rendered_message_limit;
-  pending_.history_page_size = defaults.history_page_size;
-  pending_.background_url = defaults.background_url;
-  pending_.background_override = defaults.background_override;
-
-  for (const auto& reload : config_reloaders_) {
-    reload();
+void SettingsWindow::reload_metrics() {
+  // Show the effective metrics (theme defaults with any stored override applied),
+  // so the fields always reflect what the interface is actually using.
+  const lnb::ThemeMetrics& effective = metrics();
+  for (auto& [spin, field]: metric_fields_) {
+    spin->setValue(effective.*field);
   }
 }
 
 void SettingsWindow::restore_metrics_defaults() {
-  // The theme's own defaults, before any user override: the same source
-  // apply_theme() falls back to when no override is stored.
-  pending_metrics_ = theme().metrics;
-
-  for (const auto& reload : metric_reloaders_) {
-    reload();
+  // Reset to the current theme's own defaults (before any user override). This
+  // only fills the boxes; nothing is persisted until Save.
+  const lnb::ThemeMetrics& defaults = theme().metrics;
+  for (auto& [spin, field]: metric_fields_) {
+    spin->setValue(defaults.*field);
   }
 }
 
 void SettingsWindow::save() {
-  // Refuse to save an unusable API endpoint: an invalid base would make every
-  // request fail, so the window stays open for correction instead of persisting
-  // it.
-  if (assistant_form_ != nullptr) {
-    QString url_error;
-    if (!assistant_form_->validate_base_url(url_error)) {
-      QMessageBox::warning(this, trs("Invalid API URL"), url_error);
-      return;
-    }
-  }
-
+  // Captured before the edits, so we can tell whether anything the theme depends
+  // on changed and only restyle the running app when it actually did.
   const lnb::Settings previous = settings_;
 
-  write_config();
-  write_metrics();
-
-  pending_.metrics = pending_metrics_;
-
-  settings_ = pending_;
-  lnb::save_settings(api_, settings_);
-
-  // A language change cannot reach the already-built windows (their text is set
-  // once, at construction), so it is applied for this run and the user is offered
-  // a restart to see the rest of the interface follow.
-  const bool language_changed = previous.language != settings_.language;
-  if (language_changed) {
-    lnb::i18n::set_language(lnb::i18n::language_from_code(settings_.language));
+  settings_.theme = theme_->currentText().toStdString();
+  const QString language = language_->currentData().toString();
+  if (!language.isEmpty()) {
+    settings_.language = language.toStdString();
   }
+  settings_.enter_with_modifier = enter_modifier_->isChecked();
+  settings_.rendered_message_limit = rendered_limit_->value();
+  settings_.history_page_size = history_page_->value();
+  settings_.auto_login = auto_login_->isChecked();
 
-  // The assistant's own configuration is persisted to its directory, not the
-  // global settings file. Build the edited copy and publish it in one step, so
-  // a worker never observes a half-written assistant.
+  // `stored_family` keeps an unchanged "system default" selector empty instead
+  // of baking in the application font; ui_font has a concrete Carlito default, so
+  // it always persists its current family.
+  settings_.ui_font = stored_family(ui_font_, settings_.ui_font);
+  settings_.ui_font_size = ui_font_size_->value();
+  settings_.font = stored_family(font_, settings_.font);
+  settings_.font_size = font_size_->value();
+  settings_.mono_font = stored_family(mono_font_, settings_.mono_font);
+  settings_.mono_font_size = mono_font_size_->value();
+  settings_.inline_code_scale = static_cast<float>(inline_code_scale_->value());
+
+  // Write the metric boxes back into a full ThemeMetrics and store it as the
+  // override, so the layout knobs actually persist (nullopt would mean "use the
+  // theme defaults" and silently drop the user's edits).
+  lnb::ThemeMetrics metrics_override = metrics();
+  for (const auto& [spin, field]: metric_fields_) {
+    metrics_override.*field = spin->value();
+  }
+  settings_.metrics = metrics_override;
+
   if (assistant_form_ != nullptr) {
-    const auto current = api_.assistant();
-    if (!current) {
-      return;
-    }
-    lnb::core::Assistant updated = *current;
-    assistant_form_->write_into(updated);
+    felis::bell::assistant assistant = api_.current_assistant();
+    assistant_form_->write_into(assistant);
     if (assistant_memory_ != nullptr) {
-      updated.memory_ = assistant_memory_->toPlainText().toStdString();
+      assistant.memory_ = assistant_memory_->toPlainText().toStdString();
     }
-    api_.set_assistant(std::move(updated));
-    api_.save_assistant();
+    api_.set_assistant(assistant);
   }
 
-  // Re-apply the theme at runtime so the change is visible immediately, but only
-  // when something the theme depends on actually changed. A full restyle rebuilds
-  // the application stylesheet and re-decodes the background image, which is far
-  // too expensive to run for a save that touched none of it.
+  lnb::save_settings(api_.get_store(), settings_);
+
+  // Re-apply the theme at runtime so a theme/metric/font change is visible
+  // immediately instead of only after a restart. This rebuilds the application
+  // palette, stylesheet, fonts and background, so it is gated on an actual
+  // change to keep an unrelated Save (a budget, a directory) cheap.
   if (!theme_inputs_equal(previous, settings_)) {
     if (auto* application = qobject_cast<QApplication*>(QApplication::instance())) {
       ui::apply_theme(*application, settings_);
@@ -1121,123 +501,6 @@ void SettingsWindow::save() {
   }
 
   accept();
-
-  if (language_changed) {
-    const QMessageBox::StandardButton choice = QMessageBox::question(
-        this, trs("Language changed"),
-        trs("The interface language will change after Local Notebook restarts. "
-            "Restart now?"),
-        QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes
-    );
-
-    if (choice == QMessageBox::Yes) {
-      QProcess::startDetached(
-          QCoreApplication::applicationFilePath(),
-          QCoreApplication::arguments().mid(1)
-      );
-      QCoreApplication::quit();
-    }
-  }
-}
-
-void SettingsWindow::summarize_assistant_now() {
-  if (assistant_summarizing_ || !api_.has_assistant() ||
-      assistant_memory_ == nullptr) {
-    return;
-  }
-
-  // The shared fold has its own task slot; a session turn no longer blocks it,
-  // and it waits for those turns before reading their rows.
-  if (api_.assistant_busy()) {
-    return;
-  }
-
-  assistant_summarizing_ = true;
-  assistant_summarize_->setEnabled(false);
-  assistant_summarize_->setText(trs("Updating memory..."));
-
-  // The review runs on the worker thread and blocks on the interface thread, so
-  // a decline is recorded here and read after the task finishes.
-  bool declined = false;
-
-  const lnb::core::SummaryApprover approver =
-      [&declined](const lnb::core::SummaryPlan& plan) {
-        const bool approved = review_summary(plan);
-        if (!approved) {
-          declined = true;
-        }
-        return approved;
-      };
-
-  // The interface snapshots the assistant and owns the worker. The fold persists
-  // the resulting memory itself, so nothing has to be copied back here.
-  auto result = api_.summarize_assistant(true, approver);
-  if (!result) {
-    assistant_summarizing_ = false;
-    assistant_summarize_->setEnabled(true);
-    assistant_summarize_->setText(trs("Update memory now"));
-    return;
-  }
-  auto task = *result;
-
-  // Keep the modal window responsive while the worker folds every session: the
-  // nested loop only pumps events until the task reaches a terminal state. The
-  // main window's poll timer keeps firing inside it, so the tasks window updates
-  // live.
-  QEventLoop loop;
-  QTimer timer;
-
-  QObject::connect(&timer, &QTimer::timeout, &loop, [&task, &loop]() {
-    if (task->is_terminal()) {
-      loop.quit();
-    }
-  });
-
-  timer.start(100);
-  loop.exec();
-  timer.stop();
-
-  assistant_summarizing_ = false;
-  assistant_summarize_->setEnabled(true);
-  assistant_summarize_->setText(trs("Update memory now"));
-
-  // A declined review is a deliberate no-op: say nothing about it.
-  if (declined) {
-    return;
-  }
-
-  const lnb::core::GenerationTask::Snapshot snapshot = task->snapshot();
-
-  // A cancellation was deliberate (from the tasks window): say nothing.
-  if (snapshot.status == lnb::core::GenerationTask::Status::CANCELLED) {
-    return;
-  }
-
-  if (snapshot.status == lnb::core::GenerationTask::Status::FAILED) {
-    QMessageBox::warning(
-        this, trs("Memory Update Failed"), to_qstring(snapshot.error)
-    );
-    return;
-  }
-
-  const QString previous = assistant_memory_->toPlainText();
-  const auto assistant = api_.assistant();
-  if (!assistant) {
-    return;
-  }
-  const QString memory = to_qstring(assistant->memory_);
-
-  assistant_memory_->setPlainText(memory);
-  // The fold advanced every session's assistant watermark, so the cached trigger
-  // (which the composer's summarize mode reads) must be recomputed.
-  api_.mark_assistant_summary_stale();
-
-  if (memory.isEmpty() || memory == previous) {
-    QMessageBox::information(
-        this, trs("Nothing to Update"),
-        trs("There is no new conversation to merge into memory yet.")
-    );
-  }
 }
 
 } // namespace ui

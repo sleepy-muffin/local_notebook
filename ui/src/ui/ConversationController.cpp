@@ -5,169 +5,90 @@
 namespace ui {
 
 ConversationController::ConversationController(
-    lnb::core::interface& api, std::uint32_t session_id
+    felis::bell::client& client, felis::async::multi_executor<void()>& executor,
+    std::uint32_t session_id
 )
-    : api_(api), session_id_(session_id) {}
+    : client_(client), executor_(executor), session_id_(session_id) {}
 
 ConversationController::~ConversationController() {
-  // The interface owns the worker; cancelling here only asks it to wind down.
-  if (task_ != nullptr) {
-    task_->cancel();
-  }
+  // Ask the turn to wind down, but never block the GUI thread waiting for it. The
+  // worker's callbacks capture `state_` (not `this`), so a push after this object
+  // is gone lands in live shared memory and is simply never drained.
+  handle_.request_stop();
 }
 
-lnb::core::Session ConversationController::session() const {
-  return api_.session(session_id_).value_or(lnb::core::Session{});
+void ConversationController::push(event_kind kind, std::string_view text) {
+  std::scoped_lock lock(state_->mutex);
+  state_->events.push_back(event{kind, std::string(text)});
 }
 
-bool ConversationController::busy() const {
-  return task_ != nullptr && !task_->is_terminal();
-}
-
-ConversationController::Progress ConversationController::progress() const {
-  if (task_ == nullptr) {
-    return Progress{};
-  }
-
-  const GenerationTask::Snapshot snapshot = task_->snapshot();
-  return Progress{snapshot.rounds, snapshot.elapsed_ms};
-}
-
-bool ConversationController::has_finished_task() const {
-  return task_ != nullptr && task_->is_terminal();
-}
-
-lnb::core::GenerationTask::Snapshot ConversationController::last_snapshot() const {
-  return task_ != nullptr ? task_->snapshot() : lnb::core::GenerationTask::Snapshot{};
-}
-
-std::string ConversationController::task_log() const {
-  return task_ != nullptr ? task_->log_text() : std::string{};
-}
-
-bool ConversationController::track(
-    std::shared_ptr<GenerationTask> task, bool summarization
-) {
-  if (task == nullptr) {
+bool ConversationController::send(std::string text) {
+  if (busy() || text.empty()) {
     return false;
   }
 
-  task_ = std::move(task);
-  task_is_summarization_ = summarization;
-  reported_ = false;
-  last_display_.clear();
-  last_status_.clear();
-  return true;
-}
+  const felis::bell::size_type sid(session_id_);
+  const std::shared_ptr<shared_state> state = state_;
 
-void ConversationController::observe(std::shared_ptr<GenerationTask> task) {
-  observed_task_ = std::move(task);
-  observed_reported_ = false;
-}
+  // Persist the user's turn now, on the GUI thread, so the rebuild just below
+  // shows it immediately instead of racing the worker's insert (which is what
+  // made the prompt appear only after the turn finished).
+  const felis::bell::size_type user_message_id = client_.begin_turn(sid, text);
 
-bool ConversationController::send(std::string text, lnb::core::SummaryApprover approver) {
-  // One task per session, plus the shared assistant fold which reads every
-  // session. A task in another session no longer blocks this send.
-  if (busy() || api_.session_busy(session_id_) || api_.assistant_busy() ||
-      text.empty()) {
-    return false;
-  }
+  // The turn runs on the shared executor. The callbacks only enqueue; nothing in
+  // them touches a widget, so they are safe on the worker thread.
+  felis::bell::prompt_events events;
+  events.on_text = [state](std::string_view delta) {
+    std::scoped_lock lock(state->mutex);
+    state->events.push_back(event{event_kind::text, std::string(delta)});
+  };
+  events.on_reasoning = [state](std::string_view delta) {
+    std::scoped_lock lock(state->mutex);
+    state->events.push_back(event{event_kind::reasoning, std::string(delta)});
+  };
+  events.on_status = [state](std::string_view delta) {
+    std::scoped_lock lock(state->mutex);
+    state->events.push_back(event{event_kind::status, std::string(delta)});
+  };
+  events.on_done = [state](bool ok, std::string_view error) {
+    std::scoped_lock lock(state->mutex);
+    state->events.push_back(
+        event{ok ? event_kind::done_ok : event_kind::done_error, std::string(error)}
+    );
+  };
 
-  // The interface owns the send policy: it validates the session and both summary
-  // triggers, and persists the prompt before the turn starts, so a failed
-  // generation still leaves the user's message in the transcript.
-  const auto status = api_.session_prompt(session_id_, text);
+  // Capture a pointer to the (application-owned, longer-lived) client rather than
+  // `this`, so the worker never dereferences a destroyed controller.
+  felis::bell::client* client = &client_;
 
-  if (!status) {
-    return false;
-  }
+  handle_ = executor_.spawn(
+      [client, sid, user_message_id, events](std::stop_token stop) mutable {
+        client->prompt(stop, sid, user_message_id, events);
+      }
+  );
 
+  // Rebuild the view now so the user's own message appears; the done event
+  // triggers another rebuild once the turn is stored.
   if (on_changed_) {
     on_changed_();
   }
 
-  // The prompt is stored; now start the turn. The interface keeps the task alive
-  // and runs the worker, so the controller only polls it.
-  auto task = api_.start_generation(session_id_, std::move(approver));
-  return task && track(*task);
+  return true;
 }
 
-void ConversationController::summarize(lnb::core::SummaryApprover approver) {
-  if (busy() || api_.session_busy(session_id_) || api_.assistant_busy()) {
-    return;
-  }
+void ConversationController::cancel() { handle_.request_stop(); }
 
-  // The interface resolves the level: this session's own overflow first, then
-  // the shared assistant trigger.
-  const auto status = api_.has_session_summary_trigger_met(session_id_);
+void ConversationController::delete_message_only(std::uint32_t message_id) {
+  client_.delete_message(felis::bell::size_type(message_id));
 
-  if (!status && status.error() ==
-                     lnb::core::error_code::ERR_SESSION_SUMMARY_TRIGGER_HAS_MET) {
-    summarize_session_now(std::move(approver));
-    return;
-  }
-
-  if (status || status.error() !=
-                    lnb::core::error_code::ERR_ASSISTANT_MEMORY_TRIGGER_HAS_MET) {
-    return;
-  }
-
-  // The automatic assistant pass is a no-op when the trigger is no longer
-  // reached, so it still completes cleanly without contacting the network.
-  //
-  // It is shared by every session and has its own slot, so it is only watched
-  // here. Adopting it as `task_` would make the Tasks window list this session
-  // as a running task that merely mirrors the assistant's numbers, which is
-  // impossible: while the assistant folds, no session may start a task.
-  auto task = api_.summarize_assistant(false, std::move(approver));
-  if (task) {
-    observe(*task);
-  }
-}
-
-void ConversationController::summarize_session_now(
-    lnb::core::SummaryApprover approver
-) {
-  if (busy() || api_.session_busy(session_id_) || api_.assistant_busy()) {
-    return;
-  }
-
-  // Forced, so the manual action folds the overflow regardless of the automatic
-  // trigger. The interface snapshots the assistant and session on its worker.
-  auto task = api_.summarize_session(session_id_, true, std::move(approver));
-  if (task) {
-    track(*task, true);
-  }
-}
-
-void ConversationController::cancel() {
-  // Mark the task terminal and request its stop; the worker observes the task's
-  // stop token, which is what drives the network watchdog.
-  if (task_ != nullptr) {
-    task_->cancel();
+  if (on_changed_) {
+    on_changed_();
   }
 }
 
 void ConversationController::delete_message(std::uint32_t message_id) {
-  api_.delete_message(message_id);
-
-  if (on_changed_) {
-    on_changed_();
-  }
-}
-
-void ConversationController::delete_message_only(std::uint32_t message_id) {
-  api_.delete_message_only(message_id);
-
-  if (on_changed_) {
-    on_changed_();
-  }
-}
-
-void ConversationController::edit_message(
-    std::uint32_t message_id, std::string content
-) {
-  api_.edit_message(message_id, std::move(content));
+  client_.delete_messages_from(
+      felis::bell::size_type(session_id_), felis::bell::size_type(message_id));
 
   if (on_changed_) {
     on_changed_();
@@ -175,83 +96,43 @@ void ConversationController::edit_message(
 }
 
 void ConversationController::poll() {
-  if (task_ != nullptr) {
-    const GenerationTask::Snapshot snapshot = task_->snapshot();
+  std::vector<event> pending;
+  {
+    std::scoped_lock lock(state_->mutex);
+    pending.swap(state_->events);
+  }
 
-    // A summarization fold streams the summary text itself, and its status is
-    // "Updating summarization...". Both belong to the task log in the Tasks
-    // window; forwarding them here would append the summary to the transcript as
-    // if it were a reply.
-    if (!task_is_summarization_) {
-      if (snapshot.status == GenerationTask::Status::RUNNING &&
-          snapshot.display != last_display_) {
-        last_display_ = snapshot.display;
+  for (const event& item: pending) {
+    switch (item.kind) {
+      case event_kind::text:
         if (on_stream_) {
-          on_stream_(snapshot.display);
+          on_stream_(item.text);
         }
-      }
-
-      // The transient operation title ("Searching...", "Updating summarization...")
-      // is shown until the first assistant token arrives.
-      if (snapshot.status == GenerationTask::Status::RUNNING &&
-          snapshot.operation_status != last_status_) {
-        last_status_ = snapshot.operation_status;
+        break;
+      case event_kind::reasoning:
+        if (on_reasoning_) {
+          on_reasoning_(item.text);
+        }
+        break;
+      case event_kind::status:
         if (on_status_) {
-          on_status_(snapshot.operation_status);
+          on_status_(item.text);
         }
-      }
+        break;
+      case event_kind::done_ok:
+        if (on_changed_) {
+          on_changed_();
+        }
+        break;
+      case event_kind::done_error:
+        if (!item.text.empty() && on_error_) {
+          on_error_(item.text);
+        }
+        if (on_changed_) {
+          on_changed_();
+        }
+        break;
     }
-
-    if (task_->is_terminal() && !reported_) {
-      finish_worker();
-    }
-  }
-
-  // A watched assistant pass streams no text into this session; it is polled
-  // only for its ending, which reloads the view so the composer can resolve its
-  // summarize mode. It is dropped once reported, so a stale shared pointer is
-  // never mistaken for this session's own finished task.
-  if (observed_task_ != nullptr && !observed_reported_ &&
-      observed_task_->is_terminal()) {
-    observed_reported_ = true;
-
-    const GenerationTask::Snapshot snapshot = observed_task_->snapshot();
-    observed_task_.reset();
-
-    // Report a failure the same way a failed session task is reported, so the
-    // nudge pointing at the Tasks window is not lost now that the pass is only
-    // watched.
-    if (snapshot.status == GenerationTask::Status::FAILED &&
-        !snapshot.error.empty() && on_error_) {
-      on_error_(snapshot.error);
-    }
-
-    if (on_changed_) {
-      on_changed_();
-    }
-  }
-}
-
-void ConversationController::finish_worker() {
-  // Report the outcome exactly once, before the callbacks can re-enter poll().
-  reported_ = true;
-
-  const GenerationTask::Snapshot snapshot = last_snapshot();
-
-  if (snapshot.status == GenerationTask::Status::FAILED && !snapshot.error.empty() &&
-      on_error_) {
-    on_error_(snapshot.error);
-  }
-
-  // A warning is reported for a turn that still completed; the reply is kept and
-  // the notice is shown after it.
-  if (snapshot.status == GenerationTask::Status::COMPLETED &&
-      !snapshot.warning.empty() && on_warning_) {
-    on_warning_(snapshot.warning);
-  }
-
-  if (on_changed_) {
-    on_changed_();
   }
 }
 

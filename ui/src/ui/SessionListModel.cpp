@@ -48,32 +48,32 @@ int SessionListModel::rowCount(const QModelIndex& parent) const {
 }
 
 QVariant SessionListModel::data(const QModelIndex& index, int role) const {
-  if (!index.isValid() || index.row() < 0 ||
-      index.row() >= static_cast<int>(sessions_.size())) {
+  const felis::bell::shadowed_session* session = session_at(index.row());
+
+  if (session == nullptr) {
     return {};
   }
-
-  const lnb::core::Session& session = sessions_[static_cast<std::size_t>(index.row())];
 
   switch (role) {
     case Qt::DisplayRole:
     case TitleRole: {
-      const QString title = QString::fromStdString(session.title_);
+      const QString title = QString::fromStdString(session->title_);
       return title.isEmpty() ? trs("New Session") : title;
     }
     case IdRole:
-      return static_cast<uint>(session.id_);
+      return session->id_;
     case TimeRole:
       return format_row_time(last_time_at(index.row()));
     case PinnedRole:
-      return session.pinned_;
+      return session->pinned_;
     default:
       return {};
   }
 }
 
 void SessionListModel::set_sessions(
-    std::vector<lnb::core::Session> sessions, std::vector<std::string> last_times
+    std::vector<felis::bell::shadowed_session> sessions,
+    std::vector<std::string> last_times
 ) {
   beginResetModel();
   sessions_ = std::move(sessions);
@@ -83,16 +83,17 @@ void SessionListModel::set_sessions(
   endResetModel();
 }
 
-lnb::core::Session SessionListModel::session_at(int row) const {
+const felis::bell::shadowed_session* SessionListModel::session_at(int row) const {
   if (row < 0 || row >= static_cast<int>(sessions_.size())) {
-    return {};
+    return nullptr;
   }
 
-  return sessions_[static_cast<std::size_t>(row)];
+  return &sessions_[static_cast<std::size_t>(row)];
 }
 
 std::uint32_t SessionListModel::session_id_at(int row) const {
-  return session_at(row).id_;
+  const felis::bell::shadowed_session* session = session_at(row);
+  return session != nullptr ? session->id_ : 0;
 }
 
 const std::string& SessionListModel::last_time_at(int row) const {
@@ -106,11 +107,8 @@ const std::string& SessionListModel::last_time_at(int row) const {
 }
 
 bool SessionListModel::pinned_at(int row) const {
-  if (row < 0 || row >= static_cast<int>(sessions_.size())) {
-    return false;
-  }
-
-  return sessions_[static_cast<std::size_t>(row)].pinned_;
+  const felis::bell::shadowed_session* session = session_at(row);
+  return session != nullptr && session->pinned_;
 }
 
 int SessionListModel::row_for(std::uint32_t session_id) const {

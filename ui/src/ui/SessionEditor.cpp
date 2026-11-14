@@ -2,42 +2,24 @@
 
 #include <QCheckBox>
 #include <QComboBox>
-#include <QEventLoop>
-#include <QFrame>
-#include <QGridLayout>
+#include <QDialogButtonBox>
+#include <QFormLayout>
 #include <QHBoxLayout>
-#include <QLabel>
 #include <QLineEdit>
-#include <QListWidget>
-#include <QMenu>
-#include <QMessageBox>
 #include <QPlainTextEdit>
 #include <QPushButton>
-#include <QScrollArea>
-#include <QSignalBlocker>
-#include <QSizePolicy>
 #include <QSpinBox>
-#include <QStackedWidget>
-#include <QStringList>
-#include <QTimer>
 #include <QVBoxLayout>
-#include <QWidget>
 
-#include <cstddef>
 #include <optional>
 #include <string>
+#include <vector>
 
-#include "local_notebook/core/interface.hpp"
-#include "local_notebook/core/generation_task.hpp"
-#include "local_notebook/core/model.hpp"
+#include "client.hpp"
+#include "message.hpp"
 #include "support/i18n.hpp"
-#include "ui/BackgroundWidget.hpp"
-#include "ui/ConversationView.hpp"
-#include "ui/ScrollBar.hpp"
 #include "ui/SpinBox.hpp"
-#include "ui/SummaryReviewDialog.hpp"
 #include "ui/dialog_style.hpp"
-#include "ui/theme.hpp"
 
 namespace ui {
 
@@ -45,1143 +27,257 @@ using namespace dialog_style;
 
 namespace {
 
-// A CSS colour with the colour's own alpha, so a themed row highlight can be
-// layered over the dialog's background.
-QString rgba(const QColor& color) {
-  return QStringLiteral("rgba(%1, %2, %3, %4)")
-      .arg(color.red())
-      .arg(color.green())
-      .arg(color.blue())
-      .arg(color.alphaF());
-}
+constexpr std::uint32_t kOnline = 1u << 0;
+constexpr std::uint32_t kRead = 1u << 1;
+constexpr std::uint32_t kWrite = 1u << 2;
+constexpr std::uint32_t kBash = 1u << 3;
 
-// Presets for the session budgets (design-1.md §8). Selecting one only fills the
-// fields below; it never saves, so the values can still be tweaked before Save.
-// The values are starting points, not limits.
-struct SummaryPreset {
-  const char* name;
-  int trigger;
-  int keep;
-  int summary_budget;
-};
+// Starting points for the session budgets (design-1.md §8), one row per load
+// tier. Selecting a preset only fills the fields below; it never saves, so the
+// numbers can still be tweaked before Save. threshold/preserve/summary map onto
+// the compaction policy; response is the per-reply budget.
 struct BudgetPreset {
   const char* name;
-  int response;
-};
-struct MidwayPreset {
-  const char* name;
-  // Cumulative budget for the tool output fed back to the model in one turn.
-  int midway_input;
+  int threshold;
+  int preserve;
+  int summary_budget;
+  int response_budget;
 };
 
-/**
- * summary_trigger_ summary_keep_ summary_budget_
- *
- * response_budget_ midturn_input_budget_
- */
-
-// summary:
-// trigger (the input bound and verbatim window), keep (the reading budget of
-// one summarization batch), summary budget;
-constexpr SummaryPreset kSummaryPresets[] = {
-    {"Instant",      1000,   250,   250},
-    {"Very Light",   2000,   500,  1000},
-    {"Light",        4000,  1000,  1200},
-    {"Balanced",    12000,  2000,  4000},
-    {"Heavy",       24000,  4000,  6000},
-    {"Very Heavy",  48000,  8000,  8000},
-    {"Ultra",       64000, 16000, 16000},
-};
-// response; TODO, response is extremely tight for a reasoning model with thinking mode on
-//           A usable value for them is usually above 16000, much larger than a non-reasoning model.
 constexpr BudgetPreset kBudgetPresets[] = {
-    {"Instant",                    500},
-    {"Very Light",                1000},
-    {"Light",                     2000},
-    {"Balanced",                  4000},
-    {"Heavy",                     8000},
-    {"Light (Reasoning)",        16000},
-    {"Balanced (Reasoning)",     24000},
-    {"Heavy (Reasoning)",        32000},
-    {"Very Heavy (Reasoning)",   64000},
+    {"Instant",      1000,   250,   250,   500},
+    {"Very Light",   2000,   500,  1000,  1000},
+    {"Light",        4000,  1000,  1200,  2000},
+    {"Balanced",    12000,  2000,  4000,  4000},
+    {"Heavy",       24000,  4000,  6000,  8000},
+    {"Very Heavy",  48000,  8000,  8000, 16000},
+    {"Ultra",       64000, 16000, 16000, 32000},
 };
-// tool: cumulative input produced midway (tool results fed back)
-constexpr MidwayPreset kMidwayPresets[] = {
-    {"Very Light",  20000},
-    {"Light",       50000},
-    {"Balanced",    80000},
-    {"Heavy",      120000},
-    {"Very Heavy", 170000},
-};
-
-// Two fields per row, so a section reads as a small group of related numbers
-// instead of one long budget wall.
-QGridLayout* make_budget_grid() {
-  auto* grid = new QGridLayout();
-  grid->setHorizontalSpacing(16);
-  grid->setVerticalSpacing(10);
-  return grid;
-}
-
-QSpinBox* add_budget_spin(
-    QWidget* parent, QGridLayout* grid, int row, int column,
-    const QString& label, int value, int minimum, int maximum, int step
-) {
-  auto* spin = new SpinBox(parent);
-  spin->setRange(minimum, maximum);
-  spin->setSingleStep(step);
-  spin->setGroupSeparatorShown(true);
-  spin->setValue(value);
-  // Keep the field able to shrink, so the two-column grid never forces the page
-  // wider than its viewport (which would clip the right-hand column).
-  spin->setMinimumWidth(76);
-  spin->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-  grid->addWidget(field_label(parent, label), row, column * 2);
-  grid->addWidget(spin, row, column * 2 + 1);
-  return spin;
-}
-
-// A "Preset" row above a budget grid. The combo only fills fields; it is wired
-// to them by the caller, which knows which page they belong to.
-QComboBox* add_preset_row(
-    QWidget* parent, QVBoxLayout* layout, const QString& object_name,
-    const QString& tooltip, const auto& presets
-) {
-  auto* row = new QHBoxLayout();
-  row->setSpacing(8);
-
-  auto* combo = new ComboBox(parent);
-  combo->setObjectName(object_name);
-  combo->addItem(trs("Apply a preset..."));
-  for (const auto& preset : presets) {
-    combo->addItem(trs(preset.name));
-  }
-  combo->setToolTip(tooltip);
-
-  row->addWidget(field_label(parent, trs("Preset")));
-  row->addWidget(combo, 1);
-  layout->addLayout(row);
-
-  return combo;
-}
 
 } // namespace
 
 SessionEditor::SessionEditor(
-    lnb::core::interface& api, std::uint32_t session_id, QWidget* parent
+    felis::bell::client& api, std::uint32_t session_id, QWidget* parent
 )
-    : QDialog(parent),
-      api_(api),
-      session_id_(session_id) {
+    : QDialog(parent), api_(api), session_id_(session_id) {
   setObjectName(QStringLiteral("SessionEditor"));
   setWindowTitle(session_id == 0 ? trs("New Session") : trs("Edit Session"));
-  setModal(true);
-  // The left rail costs about 190 px, so the window is wider than the old
-  // tabbed one to keep the two-column budget grids from clipping.
-  resize(800, 700);
-  setMinimumSize(680, 480);
-  setFont(ui_font());
+  resize(560, 640);
 
-  auto* root = new QVBoxLayout(this);
-  root->setContentsMargins(0, 0, 0, 0);
-  root->setSpacing(0);
-
-  auto* background = new BackgroundWidget(this);
-  root->addWidget(background);
-
-  auto* outer = new QVBoxLayout(background);
-  outer->setContentsMargins(24, 20, 24, 16);
-  outer->setSpacing(0);
-
-  auto* heading = new QLabel(
-      session_id == 0 ? trs("New Session") : trs("Edit Session"), background
-  );
-  heading->setObjectName(QStringLiteral("FormTitle"));
-  heading->setFont(scaled_font(4.0, true));
-  outer->addWidget(heading);
-  outer->addSpacing(16);
-
-  outer->addWidget(build_body(), 1);
-  outer->addSpacing(12);
-  outer->addWidget(h_separator(background));
-  outer->addSpacing(12);
-
-  auto* footer = new QHBoxLayout();
-  footer->setSpacing(8);
-  footer->addStretch(1);
-
-  cancel_button_ = new QPushButton(trs("Cancel"), background);
-  cancel_button_->setObjectName(QStringLiteral("Secondary"));
-
-  save_button_ = new QPushButton(
-      session_id == 0 ? trs("Create") : trs("Save"), background
-  );
-  save_button_->setObjectName(QStringLiteral("Primary"));
-  save_button_->setDefault(true);
-
-  footer->addWidget(cancel_button_);
-  footer->addWidget(save_button_);
-  outer->addLayout(footer);
-
-  setStyleSheet(session_stylesheet());
-
-  connect(cancel_button_, &QPushButton::clicked, this, [this]() { reject(); });
-  connect(save_button_, &QPushButton::clicked, this, [this]() { save_session(); });
-  connect(summarize_button_, &QPushButton::clicked, this, [this]() { summarize_now(); });
-
-  load_session();
-}
-
-QWidget* SessionEditor::build_body() {
-  auto* body = new QWidget();
-  auto* layout = new QHBoxLayout(body);
-  layout->setContentsMargins(0, 0, 0, 0);
-  layout->setSpacing(0);
-
-  nav_ = new QListWidget(body);
-  nav_->setObjectName(QStringLiteral("SessionNav"));
-  // The rail shows the dialog behind it; the rule lives on the list so a style
-  // that paints from the palette cannot fill the scrollbar column black.
-  show_parent_background(nav_);
-  install_scroll_bars(nav_, ScrollBarTrack::Window);
-  nav_->setFrameShape(QFrame::NoFrame);
-  nav_->setSelectionMode(QAbstractItemView::SingleSelection);
-  nav_->setEditTriggers(QAbstractItemView::NoEditTriggers);
-  nav_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-  nav_->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
-  nav_->setFocusPolicy(Qt::NoFocus);
-  nav_->addItem(trs("General"));
-  nav_->addItem(trs("Summarization"));
-  nav_->addItem(trs("Tools"));
-
-  auto* nav_wrap = new QWidget(body);
-  auto* nav_layout = new QVBoxLayout(nav_wrap);
-  nav_layout->setContentsMargins(0, 0, 8, 0);
-  nav_layout->setSpacing(0);
-  nav_layout->addWidget(nav_);
-  nav_wrap->setFixedWidth(188);
-
-  stack_ = new QStackedWidget(body);
-  stack_->setObjectName(QStringLiteral("SessionStack"));
-  stack_->setFrameShape(QFrame::NoFrame);
-
-  stack_->addWidget(scrolled_tab(build_general_tab()));
-  stack_->addWidget(scrolled_tab(build_summary_tab()));
-  stack_->addWidget(scrolled_tab(build_tools_tab()));
-
-  layout->addWidget(nav_wrap);
-  layout->addWidget(v_separator(body));
-  layout->addWidget(stack_, 1);
-
-  connect(nav_, &QListWidget::currentRowChanged, this, [this](int row) {
-    if (row >= 0) {
-      stack_->setCurrentIndex(row);
-    }
-  });
-  nav_->setCurrentRow(0);
-
-  return body;
-}
-
-QString SessionEditor::session_stylesheet() const {
-  QString sheet = dialog_stylesheet(QStringLiteral("SessionEditor"));
-
-  // The rail carries the same row states as the settings window's, so both
-  // windows read as one navigation idiom.
-  sheet += QStringLiteral(
-               "QListWidget#SessionNav::item { color: %1; padding: 7px 10px;"
-               " border-radius: 6px; margin: 1px 0; }")
-               .arg(theme().colors.text_muted.name());
-  sheet += QStringLiteral("QListWidget#SessionNav::item:hover { background: %1; }")
-               .arg(rgba(row_hover_background()));
-  sheet += QStringLiteral(
-               "QListWidget#SessionNav::item:selected { background: %1; color: %2; }")
-               .arg(rgba(row_selected_background()), theme().colors.text.name());
-  sheet += QStringLiteral("QStackedWidget#SessionStack { background: transparent; }");
-
-  // The summary version list uses the same row states as the navigation rail, so
-  // the two lists read as one idiom.
-  sheet += QStringLiteral(
-               "QListWidget#SummaryVersions::item { color: %1; padding: 6px 8px;"
-               " border-radius: 6px; margin: 1px 0; }")
-               .arg(theme().colors.text_muted.name());
-  sheet += QStringLiteral(
-               "QListWidget#SummaryVersions::item:hover { background: %1; }")
-               .arg(rgba(row_hover_background()));
-  sheet += QStringLiteral(
-               "QListWidget#SummaryVersions::item:selected { background: %1; color: %2; }")
-               .arg(rgba(row_selected_background()), theme().colors.text.name());
-
-  return sheet;
-}
-
-QWidget* SessionEditor::scrolled_tab(QWidget* content) {
-  auto* page = new QWidget();
-  auto* layout = new QVBoxLayout(page);
-  // The left margin matches the settings window's page padding (22 px), so the
-  // pages sit away from the divider instead of touching it.
-  layout->setContentsMargins(22, 0, 0, 0);
-  layout->setSpacing(0);
-
-  // Each page owns its scroll area: a single scroll area around the stack would
-  // carry the navigation rail away with the content.
-  auto* scroll = new QScrollArea(page);
-  scroll->setWidgetResizable(true);
-  scroll->setFrameShape(QFrame::NoFrame);
-  scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-  install_scroll_bars(scroll, ScrollBarTrack::Window);
-  scroll->setWidget(content);
-
-  layout->addWidget(scroll);
-  return page;
-}
-
-QWidget* SessionEditor::build_general_tab() {
-  auto* content = new QWidget();
-  auto* layout = new QVBoxLayout(content);
-  // The right margin leaves room for the page's own scrollbar.
-  layout->setContentsMargins(0, 10, 12, 10);
+  auto* layout = new QVBoxLayout(this);
+  layout->setContentsMargins(20, 20, 20, 20);
   layout->setSpacing(12);
 
-  // ---- Session ----
-  layout->addWidget(section_label(content, trs("Session")));
+  auto* form = form_layout(this);
+
+  title_ = new QLineEdit(this);
+  title_->setPlaceholderText(trs("Session title"));
+
+  instructions_ = new PlainTextEdit(this);
+  instructions_->setPlaceholderText(trs("Custom instructions for this session"));
+  instructions_->setMinimumHeight(96);
+
+  shared_directories_ = new PlainTextEdit(this);
+  shared_directories_->setPlaceholderText(trs("One directory per line"));
+  shared_directories_->setMinimumHeight(72);
+
+  form->addRow(field_label(this, trs("Title")), title_);
+  form->addRow(field_label(this, trs("Instructions")), instructions_);
+  form->addRow(field_label(this, trs("Shared directories")), shared_directories_);
+
+  reasoning_ = new ComboBox(this);
+  reasoning_->setEditable(true);
+  reasoning_->addItems({QStringLiteral("none"), QStringLiteral("low"), QStringLiteral("medium"),
+                        QStringLiteral("high")});
+  form->addRow(field_label(this, trs("Reasoning")), reasoning_);
+
+  // The reasoning level used when this session's inline summary is regenerated.
+  // It is separate from the chat's `Reasoning` above so a reasoning model can
+  // summarise at a lower effort (usually "none") and still emit visible text.
+  summary_reasoning_ = new ComboBox(this);
+  summary_reasoning_->setEditable(true);
+  summary_reasoning_->addItems({QStringLiteral("none"), QStringLiteral("low"),
+                                QStringLiteral("medium"), QStringLiteral("high")});
+  summary_reasoning_->setToolTip(trs(
+      "The reasoning level used when this session's summary is updated. "
+      "Chat turns are unaffected."
+  ));
+  form->addRow(field_label(this, trs("Summarization reasoning")), summary_reasoning_);
+
+  layout->addLayout(form);
+
+  // Tool permissions.
+  layout->addWidget(section_label(this, trs("Tools")));
   {
-    auto* form = form_layout(content);
-
-    title_ = new QLineEdit(content);
-    title_->setPlaceholderText(trs("Session title"));
-
-    // The reasoning level this session asks for. It is stored per session, so
-    // switching models (which changes the available levels) can be caught here.
-    reasoning_ = new ComboBox(content);
-    reasoning_->setObjectName(QStringLiteral("SessionReasoning"));
-    reasoning_->setToolTip(
-        trs("The reasoning level this session requests for chat turns.")
-    );
-
-    form->addRow(field_label(content, trs("Title")), title_);
-    form->addRow(field_label(content, trs("Reasoning")), reasoning_);
-
-    // The assistant-memory position is bookkeeping, kept here on the General page
-    // next to the other session-level fields rather than with the summarization
-    // versions.
-    assistant_watermark_ = new SpinBox(content);
-    assistant_watermark_->setRange(0, 2'000'000'000);
-    assistant_watermark_->setToolTip(
-        trs(
-            "Assistant memory position for this session: the highest message id "
-            "already merged into the shared assistant memory."
-        )
-    );
-    form->addRow(
-        field_label(content, trs("Assistant watermark")), assistant_watermark_
-    );
-    layout->addLayout(form);
+    auto* tools_form = form_layout(this);
+    online_tools_ = new QCheckBox(trs("Online (web search)"), this);
+    read_tools_ = new QCheckBox(trs("Read files"), this);
+    write_tools_ = new QCheckBox(trs("Write files"), this);
+    bash_tools_ = new QCheckBox(trs("Run commands"), this);
+    tools_form->addRow(QString(), online_tools_);
+    tools_form->addRow(QString(), read_tools_);
+    tools_form->addRow(QString(), write_tools_);
+    tools_form->addRow(QString(), bash_tools_);
+    layout->addLayout(tools_form);
   }
 
-  layout->addWidget(h_separator(content));
-
-  // ---- Custom instructions ----
-  layout->addWidget(section_label(content, trs("Custom instructions")));
-  instructions_ = new QPlainTextEdit(content);
-  instructions_->setTabChangesFocus(true);
-  instructions_->setMinimumHeight(96);
-  instructions_->setPlaceholderText(
-      trs("Kept separate from the generated summary; never overwritten by it.")
-  );
-  layout->addWidget(instructions_);
-
-  layout->addWidget(h_separator(content));
-
-  // ---- Budgets ----
-  layout->addWidget(section_label(content, trs("Budgets")));
+  // Budgets.
+  layout->addWidget(section_label(this, trs("Budgets")));
   {
-    const lnb::core::Session defaults;
-    auto* grid = make_budget_grid();
+    auto* budget_form = form_layout(this);
+    threshold_ = make_spin(this, 16000);
+    threshold_->setRange(1, 2'000'000'000);
+    preserve_ = make_spin(this, 4000);
+    preserve_->setRange(1, 2'000'000'000);
+    compact_budget_ = make_spin(this, 4000);
+    compact_budget_->setRange(1, 2'000'000'000);
+    response_budget_ = make_spin(this, 8000);
+    response_budget_->setRange(1, 2'000'000'000);
 
-    response_budget_ = add_budget_spin(
-        content, grid, 0, 0, trs("Response budget"),
-        static_cast<int>(defaults.response_token_budget_), 128, 2'000'000'000, 256
-    );
+    budget_form->addRow(field_label(this, trs("Compact threshold")), threshold_);
+    budget_form->addRow(field_label(this, trs("Preserve tail")), preserve_);
+    budget_form->addRow(field_label(this, trs("Summary budget")), compact_budget_);
+    budget_form->addRow(field_label(this, trs("Response budget")), response_budget_);
 
-    budget_preset_ = add_preset_row(
-        content, layout, QStringLiteral("SessionToolsPreset"),
-        trs("Fill the tool limits below with a preset. Nothing is saved until you "
-            "press Save."), kBudgetPresets
-    );
-
+    // A "Preset" row above the numbers: picking one fills the fields below with
+    // a starting point for a given load tier. It never saves on its own, so the
+    // values can still be tweaked before Save.
+    budget_preset_ = new ComboBox(this);
+    budget_preset_->addItem(trs("Apply a preset..."));
+    for (const BudgetPreset& preset: kBudgetPresets) {
+      budget_preset_->addItem(trs(preset.name));
+    }
+    budget_preset_->setToolTip(trs(
+        "Fill the budget fields below with a starting point for a given load. "
+        "Nothing is saved until you press Save."
+    ));
     connect(
         budget_preset_, qOverload<int>(&QComboBox::currentIndexChanged), this,
         [this](int index) {
           if (index <= 0) {
             return;
           }
-
-          response_budget_->setValue(kBudgetPresets[index - 1].response);
+          const BudgetPreset& preset = kBudgetPresets[index - 1];
+          threshold_->setValue(preset.threshold);
+          preserve_->setValue(preset.preserve);
+          compact_budget_->setValue(preset.summary_budget);
+          response_budget_->setValue(preset.response_budget);
         }
     );
+    auto* preset_row = new QHBoxLayout();
+    preset_row->setSpacing(8);
+    preset_row->addWidget(field_label(this, trs("Preset")));
+    preset_row->addWidget(budget_preset_, 1);
 
-    // TODO
-    // Add a row of description under `response_budget_`
-    // It should tell the user that it involves the output caused by thinking
-
-    layout->addLayout(grid);
+    layout->addLayout(preset_row);
+    layout->addLayout(budget_form);
   }
 
   layout->addStretch(1);
 
-  return content;
-}
+  auto* buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, this);
+  buttons->button(QDialogButtonBox::Save)->setObjectName(QStringLiteral("Primary"));
+  buttons->button(QDialogButtonBox::Cancel)->setObjectName(QStringLiteral("Secondary"));
+  connect(buttons, &QDialogButtonBox::accepted, this, [this]() { save_session(); });
+  connect(buttons, &QDialogButtonBox::rejected, this, [this]() { reject(); });
+  layout->addWidget(buttons);
 
-QWidget* SessionEditor::build_summary_tab() {
-  auto* content = new QWidget();
-  auto* layout = new QVBoxLayout(content);
-  layout->setContentsMargins(0, 10, 12, 10);
-  layout->setSpacing(12);
+  setStyleSheet(dialog_stylesheet(QStringLiteral("SessionEditor")));
 
-  // ---- Conversation summarization ----
-  auto* summary_header = new QHBoxLayout();
-  summary_header->setSpacing(8);
-  summary_header->addWidget(section_label(content, trs("Summarization")));
-  summary_header->addStretch(1);
-
-  summarize_button_ = new QPushButton(trs("Update summarization now"), content);
-  summarize_button_->setObjectName(QStringLiteral("Secondary"));
-  summarize_button_->setToolTip(
-      trs(
-          "Merge the conversation into the summary below, ignoring the automatic "
-          "summarization trigger. Idempotent: pressing it again with no new messages "
-          "changes nothing."
-      )
-  );
-  summary_header->addWidget(summarize_button_);
-  layout->addLayout(summary_header);
-
-  // The assistant memory is shared by every session; this one can opt out
-  // without losing its own conversation summarization.
-  include_in_assistant_memory_ = new QCheckBox(
-      trs("Include in assistant memory"), content
-  );
-  include_in_assistant_memory_->setToolTip(
-      trs(
-          "When off, this session's messages and summarization are left out of the "
-          "shared assistant memory. This session's own summarization is "
-          "unaffected."
-      )
-  );
-  layout->addWidget(include_in_assistant_memory_);
-
-  // The version list sits to the left of the summary box. Selecting a version
-  // shows its content and watermark; right-clicking one removes it, which lets an
-  // older version become active again.
-  {
-    auto* row = new QHBoxLayout();
-    row->setSpacing(8);
-
-    summary_versions_ = new QListWidget(content);
-    summary_versions_->setObjectName(QStringLiteral("SummaryVersions"));
-    summary_versions_->setMinimumWidth(150);
-    summary_versions_->setMaximumWidth(220);
-    summary_versions_->setFrameShape(QFrame::NoFrame);
-    summary_versions_->setSelectionMode(QAbstractItemView::SingleSelection);
-    summary_versions_->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    summary_versions_->setContextMenuPolicy(Qt::CustomContextMenu);
-    summary_versions_->setFocusPolicy(Qt::NoFocus);
-    summary_versions_->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
-    show_parent_background(summary_versions_);
-    install_scroll_bars(summary_versions_, ScrollBarTrack::Window);
-    summary_versions_->setToolTip(
-        trs(
-            "Stored summary versions, newest first. Select one to view its summary "
-            "and watermark; right-click one to remove it."
-        )
-    );
-    row->addWidget(summary_versions_);
-
-    auto* column = new QVBoxLayout();
-    column->setSpacing(8);
-
-    summary_ = new PlainTextEdit(content);
-    summary_->setTabChangesFocus(true);
-    summary_->setMinimumHeight(140);
-    summary_->setPlaceholderText(
-        trs(
-            "Automatically maintained record of older turns. Edit to correct it, "
-            "or clear it to rebuild it from the whole transcript."
-        )
-    );
-    column->addWidget(summary_, 1);
-
-    // The watermark sits under the summary: the highest message id already merged.
-    auto* form = form_layout(content);
-
-    watermark_ = new SpinBox(content);
-    watermark_->setRange(0, 2'000'000'000);
-    watermark_->setToolTip(
-        trs(
-            "Conversation summary position: the highest message id already merged "
-            "into the summary above. Used only to decide when the automatic "
-            "summarization update fires."
-        )
-    );
-
-    form->addRow(field_label(content, trs("Summarization watermark")), watermark_);
-    column->addLayout(form);
-
-    row->addLayout(column, 1);
-    layout->addLayout(row);
-  }
-
-  connect(
-      summary_versions_, &QListWidget::currentRowChanged, this,
-      [this](int row) { show_summary_version(row); }
-  );
-  connect(
-      summary_versions_, &QListWidget::customContextMenuRequested, this,
-      [this](const QPoint& pos) {
-        auto* item = summary_versions_->itemAt(pos);
-
-        if (item == nullptr) {
-          return;
-        }
-
-        const auto id = item->data(Qt::UserRole).toUInt();
-
-        if (id == 0) {
-          return;
-        }
-
-        QMenu menu(summary_versions_);
-        QAction* remove = menu.addAction(trs("Remove summary version"));
-        QAction* chosen = menu.exec(summary_versions_->viewport()->mapToGlobal(pos));
-
-        if (chosen == remove) {
-          remove_summary_version(id);
-        }
-      }
-  );
-
-  layout->addWidget(h_separator(content));
-
-  // ---- Summarization triggers ----
-  layout->addWidget(section_label(content, trs("Summarization triggers")));
-
-  summary_preset_ = add_preset_row(
-      content, layout, QStringLiteral("SessionSummaryPreset"),
-      trs("Fill the summarization fields below with a preset. It also sets the "
-          "response budget on the General page, which must not exceed the "
-          "summarization trigger. Nothing is saved until you press Save."),
-      kSummaryPresets
-  );
-
-  connect(
-      summary_preset_, qOverload<int>(&QComboBox::currentIndexChanged), this,
-      [this](int index) {
-        if (index <= 0) {
-          return;
-        }
-
-        const SummaryPreset& summary_preset = kSummaryPresets[index - 1];
-        summary_trigger_->setValue(summary_preset.trigger);
-        summary_keep_->setValue(summary_preset.keep);
-        summary_budget_->setValue(summary_preset.summary_budget);
-        // response_budget_->setValue(budget_preset.response);
-      }
-  );
-
-  {
-    auto* form = form_layout(content);
-
-    // The summariser's own level, independent of the chat level on the General
-    // page. A summarization update can therefore run without reasoning while
-    // turns reason (or the other way round).
-    summary_reasoning_ = new ComboBox(content);
-    summary_reasoning_->setObjectName(QStringLiteral("SessionSummaryReasoning"));
-    summary_reasoning_->setToolTip(
-        trs("The reasoning level used when this session's summarization is updated. "
-            "Chat turns are unaffected.")
-    );
-
-    form->addRow(
-        field_label(content, trs("Summarization reasoning")), summary_reasoning_
-    );
-    layout->addLayout(form);
-  }
-
-  {
-    const lnb::core::Session defaults;
-    auto* grid = make_budget_grid();
-
-    // The trigger decides when the transcript is merged and which newest
-    // messages stay verbatim; the second field is only the read budget of one
-    // summarization batch.
-    summary_trigger_ = add_budget_spin(
-        content, grid, 0, 0, trs("Summarization trigger"),
-        static_cast<int>(defaults.summary_trigger_tokens_), 256, 2'000'000'000, 256
-    );
-    summary_keep_ = add_budget_spin(
-        content, grid, 0, 1, trs("Summarization content"),
-        static_cast<int>(defaults.summary_keep_tokens_), 128, 2'000'000'000, 128
-    );
-    summary_budget_ = add_budget_spin(
-        content, grid, 1, 0, trs("Summarization budget"),
-        static_cast<int>(defaults.summary_token_budget_), 128, 2'000'000'000, 256
-    );
-
-    layout->addLayout(grid);
-  }
-
-  layout->addWidget(h_separator(content));
-
-  // A permanent reference, kept at the bottom of the page so the fields above can
-  // be used with confidence.
-  auto* docs = new QLabel(content);
-  docs->setObjectName(QStringLiteral("Muted"));
-  docs->setWordWrap(true);
-  docs->setTextFormat(Qt::RichText);
-  QSizePolicy docs_policy(QSizePolicy::Preferred, QSizePolicy::Minimum);
-  docs_policy.setHeightForWidth(true);
-  docs->setSizePolicy(docs_policy);
-  docs->setText(trs(
-      "<b>How conversation summarization works</b><br>"
-      "Conversation summarization is a rolling record of older turns. A request "
-      "carries the system prompt plus the transcript, always the newest messages "
-      "that fit <i>Summarization trigger</i>. When the new transcript since the "
-      "last update reaches that trigger, the summarizer reads from the first new "
-      "message up to the newest <i>Summarization content</i> tokens and merges "
-      "them into the summary. Keep it below the trigger so there is always "
-      "something to fold. The message that crosses a boundary is kept whole.<br><br>"
-      "The watermarks above are <b>bookkeeping only</b>: they count how much is new "
-      "so the trigger can fire. They never decide what is sent or what is read — a "
-      "summarization update always reads by recency, so pressing <b>Update "
-      "summarization now</b> twice with no new messages reads the same set and "
-      "produces the same summary (idempotent). Custom instructions are kept "
-      "separate and are never touched.<br><br>"
-      "The <b>assistant memory</b> is shared across every session: it is merged "
-      "from the recent messages of all sessions (bounded by the assistant's own "
-      "trigger) plus each session's summarization (bounded by the session-pool "
-      "budget). Older sessions may therefore be forgotten. This session opts out "
-      "of that sharing when <i>Include in assistant memory</i> is off.<br><br>"
-      "Clearing the summary and saving resets its watermark to 0, re-admitting the "
-      "whole transcript."
-  ));
-  layout->addWidget(docs);
-
-  layout->addStretch(1);
-
-  return content;
-}
-
-QWidget* SessionEditor::build_tools_tab() {
-  auto* content = new QWidget();
-  auto* layout = new QVBoxLayout(content);
-  layout->setContentsMargins(0, 10, 12, 10);
-  layout->setSpacing(12);
-
-  // ---- Shared directories ----
-//   {
-//     auto* form = form_layout(content);
-//
-//     layout->addLayout(form);
-//   }
-
-  // layout->addWidget(h_separator(content));
-
-  // ---- Tool permissions ----
-  layout->addWidget(section_label(content, trs("Tool permissions")));
-  {
-    auto* form = form_layout(content);
-
-    tools_enabled_ = new QCheckBox(trs("Enable for this session"), content);
-    tools_enabled_->setToolTip(
-        trs(
-            "When off, no tools are offered to the model for this session. The "
-            "switches below keep their values."
-        )
-    );
-
-    read_tools_ = new QCheckBox(trs("Read files"), content);
-    read_tools_->setToolTip(
-        trs("Allow listing, searching and reading files in the shared directories.")
-    );
-
-    write_tools_ = new QCheckBox(trs("Write files"), content);
-    write_tools_->setToolTip(
-        trs(
-            "Allow creating, overwriting, editing and deleting files in the "
-            "shared directories."
-        )
-    );
-
-    online_tools_ = new QCheckBox(trs("Search online"), content);
-    online_tools_->setToolTip(
-        trs("Allow web searches and fetching web pages.")
-    );
-
-
-    shared_directories_ = new PlainTextEdit(content);
-    shared_directories_->setTabChangesFocus(true);
-    shared_directories_->setMinimumHeight(64);
-    shared_directories_->setMaximumHeight(96);
-    shared_directories_->setPlaceholderText(
-        trs("Directories the assistant may access, one per line (optional)")
-    );
-
-    auto* description = field_label(
-        content,
-        trs("One directory per line. The model only sees relative paths inside "
-            "these directories, and its writes stay inside them. If several "
-            "directories share a name, the later ones gain a numeric suffix.")
-    );
-
-    form->addRow(field_label(content, trs("Tools")), tools_enabled_);
-    form->addRow(field_label(content, trs("Read")), read_tools_);
-    form->addRow(field_label(content, trs("Write")), write_tools_);
-    form->addRow(field_label(content, trs("Online")), online_tools_);
-
-    form->addRow(field_label(content, trs("Shared directories")), shared_directories_);
-    form->addRow(QString(), description);
-
-    connect(tools_enabled_, &QCheckBox::toggled, this, [this](bool enabled) {
-      read_tools_->setEnabled(enabled);
-      write_tools_->setEnabled(enabled);
-      online_tools_->setEnabled(enabled);
-    });
-
-    layout->addLayout(form);
-  }
-
-  layout->addWidget(h_separator(content));
-
-  // ---- Tool limits ----
-  layout->addWidget(section_label(content, trs("Tool limits")));
-
-  tools_preset_ = add_preset_row(
-      content, layout, QStringLiteral("SessionToolsPreset"),
-      trs("Fill the tool limits below with a preset. Nothing is saved until you "
-          "press Save."), kMidwayPresets
-  );
-
-  connect(
-      tools_preset_, qOverload<int>(&QComboBox::currentIndexChanged), this,
-      [this](int index) {
-        if (index <= 0) {
-          return;
-        }
-
-        midturn_input_budget_->setValue(kMidwayPresets[index - 1].midway_input);
-      }
-  );
-
-  {
-    const lnb::core::Session defaults;
-    auto* grid = make_budget_grid();
-
-    midturn_input_budget_ = add_budget_spin(
-        content, grid, 0, 0,
-        trs("Input token produced midway"),
-        static_cast<int>(defaults.input_token_produced_midway_), 0,
-        2'000'000'000, 1000
-    );
-    layout->addLayout(grid);
-
-    auto* description = field_label(
-        content,
-        trs(
-            "Total tokens of tool output this session may feed back to the "
-            "model in one turn, counted across every tool call in that turn. "
-            "Once the budget is spent, the remaining answer is produced without "
-            "tools. 0 disables the limit."
-        )
-    );
-    layout->addWidget(description);
-  }
-
-  layout->addStretch(1);
-
-  return content;
+  load_session();
 }
 
 void SessionEditor::load_session() {
-  if (session_id_ != 0) {
-    const auto stored = api_.session(session_id_);
+  if (session_id_ == 0) {
+    reasoning_->setCurrentText(QStringLiteral("medium"));
+    summary_reasoning_->setCurrentText(QStringLiteral("none"));
+    return;
+  }
 
-    if (stored.has_value()) {
-      session_ = *stored;
+  const std::optional<felis::bell::session> stored =
+      api_.load_session(felis::bell::size_type(session_id_));
+
+  if (!stored.has_value()) {
+    return;
+  }
+
+  const felis::bell::session& session = *stored;
+
+  title_->setText(to_qstring(session.title()));
+  instructions_->setPlainText(to_qstring(session.custom_instructions()));
+
+  std::string dirs;
+  for (const std::string& directory: session.shared_directories()) {
+    if (!dirs.empty()) {
+      dirs.push_back('\n');
     }
+    dirs += directory;
   }
+  shared_directories_->setPlainText(to_qstring(dirs));
 
-  title_->setText(to_qstring(session_.title_));
-  instructions_->setPlainText(to_qstring(session_.custom_instructions_));
-  summary_->setPlainText(to_qstring(session_.summary_));
+  reasoning_->setCurrentText(to_qstring(session.reasoning_effort()));
+  summary_reasoning_->setCurrentText(to_qstring(session.auto_compact_reasoning_effort()));
 
-  // A brand-new session starts on the assistant's level (which itself defaults to
-  // the model's first available one); an existing row keeps the level it stores.
-  // Either way an empty value resolves to the model's first available level.
-  const auto assistant = api_.assistant();
-  const std::string preferred = session_id_ == 0 && assistant
-      ? assistant->reasoning_effort_
-      : session_.reasoning_effort_;
-  populate_reasoning(reasoning_, preferred);
+  const std::uint32_t caps = session.tools().raw();
+  online_tools_->setChecked((caps & kOnline) != 0);
+  read_tools_->setChecked((caps & kRead) != 0);
+  write_tools_->setChecked((caps & kWrite) != 0);
+  bash_tools_->setChecked((caps & kBash) != 0);
 
-  // The summariser has its own level (default none), independent of the chat
-  // level above. A new session uses the Session default.
-  populate_reasoning(summary_reasoning_, session_.summary_reasoning_effort_);
-
-  QStringList directories;
-
-  for (const std::string& directory: session_.shared_directories_) {
-    directories << to_qstring(directory);
-  }
-
-  shared_directories_->setPlainText(directories.join(u'\n'));
-
-  tools_enabled_->setChecked(session_.tools_enabled_);
-  read_tools_->setChecked(session_.read_tools_enabled_);
-  write_tools_->setChecked(session_.write_tools_enabled_);
-  online_tools_->setChecked(session_.online_tools_enabled_);
-  read_tools_->setEnabled(session_.tools_enabled_);
-  write_tools_->setEnabled(session_.tools_enabled_);
-  online_tools_->setEnabled(session_.tools_enabled_);
-
-  include_in_assistant_memory_->setChecked(session_.include_in_assistant_memory_);
-
-  watermark_->setValue(static_cast<int>(session_.summary_watermark_));
-  assistant_watermark_->setValue(static_cast<int>(session_.assistant_memory_watermark_));
-
-  // Show the stored summary versions; the active one fills the box.
-  reload_summary_versions();
-
-  summary_keep_->setValue(static_cast<int>(session_.summary_keep_tokens_));
-  summary_trigger_->setValue(static_cast<int>(session_.summary_trigger_tokens_));
-  summary_budget_->setValue(static_cast<int>(session_.summary_token_budget_));
-  response_budget_->setValue(static_cast<int>(session_.response_token_budget_));
-  midturn_input_budget_->setValue(
-      static_cast<int>(session_.input_token_produced_midway_)
-  );
-
-  // Only a saved session has stored messages to merge.
-  summarize_button_->setEnabled(session_id_ != 0);
-}
-
-void SessionEditor::populate_reasoning(
-    QComboBox* combo, const std::string& preferred
-) {
-  if (combo == nullptr) {
-    return;
-  }
-
-  const auto assistant = api_.assistant();
-  const std::string model = assistant ? assistant->model_ : std::string{};
-  const std::string wanted = preferred;
-  const std::string target =
-      wanted.empty() ? lnb::core::reasoning_default_for(model) : wanted;
-
-  const std::vector<std::string> efforts =
-      lnb::core::reasoning_levels_for(model, target);
-
-  const QSignalBlocker blocker(combo);
-  combo->clear();
-
-  int selected = 0;
-  for (std::size_t i = 0; i < efforts.size(); ++i) {
-    combo->addItem(to_qstring(efforts[i]));
-
-    if (QString::compare(to_qstring(efforts[i]), to_qstring(target), Qt::CaseInsensitive) == 0) {
-      selected = static_cast<int>(i);
-    }
-  }
-
-  combo->setCurrentIndex(selected);
-}
-
-void SessionEditor::reload_summary_versions() {
-  if (summary_versions_ == nullptr) {
-    return;
-  }
-
-  summary_versions_->clear();
-
-  const std::vector<lnb::core::Summary> versions = session_id_ == 0
-      ? std::vector<lnb::core::Summary>{}
-      : api_.summaries(session_id_);
-
-  // Newest first: the active summary is the one with the greatest watermark, so
-  // the first row is the live one and the rest are fallbacks.
-  bool active = true;
-
-  for (auto it = versions.rbegin(); it != versions.rend(); ++it) {
-    QString label = trs("Message %1").arg(it->watermark_);
-
-    if (active) {
-      label += QStringLiteral(" · ") + trs("Active");
-    }
-
-    auto* item = new QListWidgetItem(label, summary_versions_);
-    item->setData(Qt::UserRole, it->id_);
-    item->setData(Qt::UserRole + 1, it->watermark_);
-    item->setData(Qt::UserRole + 2, to_qstring(it->content_));
-    item->setData(Qt::UserRole + 3, to_qstring(it->made_at_));
-    item->setData(Qt::UserRole + 4, active);
-    item->setToolTip(
-        trs("Merged up to message %1, made at %2.")
-            .arg(it->watermark_)
-            .arg(to_qstring(it->made_at_))
-    );
-    active = false;
-  }
-
-  if (summary_versions_->count() > 0) {
-    summary_versions_->setCurrentRow(0);
-  } else {
-    show_summary_version(-1);
-  }
-}
-
-void SessionEditor::show_summary_version(int row) {
-  if (row < 0 || row >= summary_versions_->count()) {
-    // Nothing to show: leave the box editable so a new summary can be written.
-    shown_summary_id_ = 0;
-    shown_summary_content_.clear();
-    shown_summary_watermark_ = 0;
-    shown_summary_active_ = true;
-    summary_->setReadOnly(false);
-    watermark_->setEnabled(true);
-    return;
-  }
-
-  auto* item = summary_versions_->item(row);
-  const auto id = item->data(Qt::UserRole).toUInt();
-  const auto watermark = item->data(Qt::UserRole + 1).toUInt();
-  const QString content = item->data(Qt::UserRole + 2).toString();
-  const bool active = item->data(Qt::UserRole + 4).toBool();
-
-  shown_summary_id_ = id;
-  shown_summary_content_ = content.toStdString();
-  shown_summary_watermark_ = watermark;
-  shown_summary_active_ = active;
-
-  summary_->setPlainText(content);
-  watermark_->setValue(static_cast<int>(watermark));
-
-  // Only the active version may be edited; an older one is shown read-only so a
-  // Save cannot silently revoke the newer versions.
-  summary_->setReadOnly(!active);
-  watermark_->setEnabled(active);
-}
-
-void SessionEditor::remove_summary_version(std::uint32_t summary_id) {
-  if (summary_id == 0) {
-    return;
-  }
-
-  if (!api_.delete_summary(summary_id)) {
-    return;
-  }
-
-  // The active summary may have been the one removed; re-read the projection so
-  // the box reflects whichever older version is now active again.
-  if (const auto stored = api_.session(session_id_); stored.has_value()) {
-    session_.summary_ = stored->summary_;
-    session_.summary_watermark_ = stored->summary_watermark_;
-  }
-
-  reload_summary_versions();
+  threshold_->setValue(static_cast<int>(session.auto_compact_threshold().get()));
+  preserve_->setValue(static_cast<int>(session.auto_compact_preserve().get()));
+  compact_budget_->setValue(static_cast<int>(session.auto_compact_budget().get()));
+  response_budget_->setValue(static_cast<int>(session.response_budget().get()));
 }
 
 void SessionEditor::save_session() {
-  // The summarisation must leave something between the watermark frontier and
-  // the content boundary, so the content limit has to sit below the trigger.
-  const std::size_t trigger = static_cast<std::size_t>(summary_trigger_->value());
-  const std::size_t keep = static_cast<std::size_t>(summary_keep_->value());
+  using felis::bell::size_type;
 
-  if (keep >= trigger) {
-    QMessageBox::warning(
-        this, trs("Invalid Budget"),
-        trs(
-            "The summarization content must be smaller than the summarization "
-            "trigger. Otherwise an update would find nothing new to fold, and the "
-            "trigger would fire again immediately."
-        )
-    );
+  std::string title = title_->text().trimmed().toStdString();
+  if (title.empty()) {
+    title = trs("Untitled").toStdString();
+  }
+
+  // A brand-new session has no row yet; create it (title only) so it has an id.
+  if (session_id_ == 0) {
+    const size_type created =
+        api_.create_session(felis::bell::shadowed_session(0, title));
+    session_id_ = created.get();
+  }
+
+  const std::optional<felis::bell::session> stored = api_.load_session(size_type(session_id_));
+  if (!stored.has_value()) {
+    reject();
     return;
   }
 
-  lnb::core::Session session = session_;
-
-  session.title_ = title_->text().trimmed().toStdString();
-  session.custom_instructions_ = instructions_->toPlainText().toStdString();
-
-  // Only the active version is editable. When an older version is merely being
-  // inspected (shown read-only), keep the active summary and its watermark
-  // untouched so Save does not revoke the newer versions.
-  if (shown_summary_active_) {
-    session.summary_ = summary_->toPlainText().toStdString();
-  } else {
-    session.summary_ = session_.summary_;
+  std::vector<std::string> directories;
+  for (const QString& line: shared_directories_->toPlainText().split(QLatin1Char('\n'))) {
+    const QString trimmed = line.trimmed();
+    if (!trimmed.isEmpty()) {
+      directories.push_back(trimmed.toStdString());
+    }
   }
 
-  session.shared_directories_.clear();
+  std::uint32_t caps = 0;
+  if (online_tools_->isChecked()) caps |= kOnline;
+  if (read_tools_->isChecked()) caps |= kRead;
+  if (write_tools_->isChecked()) caps |= kWrite;
+  if (bash_tools_->isChecked()) caps |= kBash;
 
-  const QStringList directories = shared_directories_->toPlainText().split(
-      u'\n', Qt::SkipEmptyParts
+  felis::bell::session updated(
+      size_type(session_id_), title, instructions_->toPlainText().toStdString(),
+      reasoning_->currentText().toStdString(), summary_reasoning_->currentText().toStdString(),
+      std::move(directories), stored->kind(),
+      stored->pinned(), felis::bell::tool_capabilities(caps),
+      size_type(static_cast<std::uint32_t>(threshold_->value())),
+      size_type(static_cast<std::uint32_t>(preserve_->value())),
+      size_type(static_cast<std::uint32_t>(compact_budget_->value())),
+      size_type(static_cast<std::uint32_t>(response_budget_->value()))
   );
 
-  for (const QString& entry: directories) {
-    const QString directory = entry.trimmed();
-
-    if (!directory.isEmpty()) {
-      session.shared_directories_.push_back(directory.toStdString());
-    }
-  }
-
-  // Clearing the summary re-admits the whole transcript.
-  session.summary_watermark_ = session.summary_.empty()
-      ? 0
-      : (shown_summary_active_
-             ? static_cast<std::uint32_t>(watermark_->value())
-             : session_.summary_watermark_);
-  session.assistant_memory_watermark_ =
-      static_cast<std::uint32_t>(assistant_watermark_->value());
-
-  session.summary_keep_tokens_ = static_cast<std::size_t>(summary_keep_->value());
-  session.summary_trigger_tokens_ = static_cast<std::size_t>(summary_trigger_->value());
-  session.summary_token_budget_ = static_cast<std::size_t>(summary_budget_->value());
-  session.response_token_budget_ = static_cast<std::size_t>(response_budget_->value());
-  session.input_token_produced_midway_ =
-      static_cast<std::size_t>(midturn_input_budget_->value());
-  session.reasoning_effort_ = reasoning_->currentText().toStdString();
-  session.summary_reasoning_effort_ =
-      summary_reasoning_->currentText().toStdString();
-
-  session.tools_enabled_ = tools_enabled_->isChecked();
-  session.read_tools_enabled_ = read_tools_->isChecked();
-  session.write_tools_enabled_ = write_tools_->isChecked();
-  session.online_tools_enabled_ = online_tools_->isChecked();
-  session.include_in_assistant_memory_ = include_in_assistant_memory_->isChecked();
-
-  if (session_id_ == 0) {
-    session_id_ = api_.create_session(session);
-  } else {
-    session.id_ = session_id_;
-    api_.save_session(session);
-  }
-
-  session_ = session;
+  api_.save_session(updated);
   accept();
-}
-
-void SessionEditor::summarize_now() {
-  if (session_id_ == 0 || summarizing_ || conversation_view_ == nullptr) {
-    return;
-  }
-
-  // A manual summarization update runs as the session's own task, so it must
-  // never be started while a turn is already in flight: the one-task-per-session
-  // model is what guarantees a generation and a summarization update cannot
-  // touch the same session's summary, watermark and messages at once.
-  if (conversation_view_->busy() || api_.assistant_busy()) {
-    QMessageBox::information(
-        this, trs("Session Busy"),
-        trs(
-            "A task is already running. Wait for it to finish, then update "
-            "the summarization."
-        )
-    );
-    return;
-  }
-
-  summarizing_ = true;
-  summarize_button_->setEnabled(false);
-  summarize_button_->setText(trs("Updating summarization..."));
-  save_button_->setEnabled(false);
-  cancel_button_->setEnabled(false);
-
-  // The review runs on the worker thread and blocks on the interface thread, so a
-  // decline is recorded here and read after the task finishes.
-  bool declined = false;
-  const lnb::core::SummaryApprover approver =
-      [&declined](const lnb::core::SummaryPlan& plan) {
-        const bool approved = review_summary(plan);
-        if (!approved) {
-          declined = true;
-        }
-        return approved;
-      };
-
-  // The update is driven through the view, so it runs as the session's single
-  // task and appears in the tasks window like any other turn.
-  conversation_view_->summarize_session_now(approver);
-
-  // Keep the modal dialog responsive while the worker merges the transcript: the
-  // nested loop only pumps events until the task reaches a terminal state. The
-  // window's poll timer keeps firing inside it, so the tasks window updates live.
-  QEventLoop loop;
-  QTimer timer;
-
-  QObject::connect(&timer, &QTimer::timeout, &loop, [this, &loop]() {
-    if (!conversation_view_->busy()) {
-      loop.quit();
-    }
-  });
-
-  timer.start(100);
-  loop.exec();
-  timer.stop();
-
-  summarizing_ = false;
-  summarize_button_->setEnabled(true);
-  summarize_button_->setText(trs("Update summarization now"));
-  save_button_->setEnabled(true);
-  cancel_button_->setEnabled(true);
-
-  // A declined review is a deliberate no-op: say nothing about it.
-  if (declined) {
-    return;
-  }
-
-  const lnb::core::GenerationTask::Snapshot snapshot =
-      conversation_view_->last_snapshot();
-
-  // A cancelled pass merged nothing and must not be reported as "nothing to
-  // update": cancelling is a deliberate no-op, exactly like a declined
-  // review, and the summary is simply left untouched.
-  if (snapshot.status == lnb::core::GenerationTask::Status::CANCELLED) {
-    return;
-  }
-
-  if (snapshot.status == lnb::core::GenerationTask::Status::FAILED) {
-    QMessageBox::warning(
-        this, trs("Summarization Update Failed"), to_qstring(snapshot.error)
-    );
-    return;
-  }
-
-  // The summariser persists the new summary; reload it so the box shows the
-  // result and a later Save keeps the advanced watermark.
-  const auto updated = api_.session(session_id_);
-
-  if (!updated.has_value()) {
-    return;
-  }
-
-  const QString previous = summary_->toPlainText();
-  const QString summary = to_qstring(updated->summary_);
-
-  summary_->setPlainText(summary);
-  session_.summary_ = updated->summary_;
-  session_.summary_watermark_ = updated->summary_watermark_;
-  watermark_->setValue(static_cast<int>(updated->summary_watermark_));
-
-  // The summariser stored a new version; show it (now the active one).
-  reload_summary_versions();
-
-  if (summary.isEmpty() || summary == previous) {
-    QMessageBox::information(
-        this, trs("Nothing to Update"),
-        trs("There is no new conversation to summarize yet.")
-    );
-  }
 }
 
 } // namespace ui

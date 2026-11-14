@@ -5,7 +5,7 @@
 #include <string>
 
 #include "settings/metrics.hpp"
-#include "local_notebook/core/interface.hpp"
+#include "store.hpp"
 
 namespace lnb {
 
@@ -36,8 +36,9 @@ struct Settings {
       std::array<float, 4>{0.094f, 0.098f, 0.149f, 0.85f};
 
   // General UI font (every widget), chat font (transcript + composer) and
-  // monospace font (code). An empty family keeps the system default.
-  std::string ui_font;
+  // monospace font (code). Carlito is the default interface font; an empty
+  // family keeps the system default (for the chat and monospace roles).
+  std::string ui_font = "Carlito";
   int ui_font_size = 11;
   std::string font;
   int font_size = 12;
@@ -66,8 +67,8 @@ struct Settings {
 };
 
 // data/settings.json. A missing or malformed file yields the defaults.
-Settings load_settings(const lnb::core::interface& api);
-void save_settings(const lnb::core::interface& api, const Settings& settings);
+Settings load_settings(const felis::bell::store& store);
+void save_settings(const felis::bell::store& store, const Settings& settings);
 
 // The language to use before the user has chosen one, derived from the system
 // locale: "zh" for Chinese, "ja" for Japanese, and "en" otherwise. This is

@@ -3,26 +3,32 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <string_view>
+#include <vector>
 
-#include "local_notebook/core/generation_task.hpp"
-#include "local_notebook/core/interface.hpp"
-#include "local_notebook/core/model.hpp"
+#include <felis/async.hpp>
+
+#include "client.hpp"
 
 namespace ui {
 
-// The shared worker state lives in lnb; bring it in so the controller reads
-// naturally.
-using lnb::core::GenerationTask;
-
-// One session's conversation logic. The application owns a single
-// lnb::core::interface, and every controller talks to it: a send is validated and
-// persisted by interface::session_prompt(), then the turn itself is driven by
-// interface::start_generation(). The controller only polls the task the
-// interface returns, so the view stays passive.
+// One session's conversation logic. The view is passive: it forwards intent
+// (send, cancel, delete) and this controller drives a single blocking
+// `felis::bell::client::prompt` turn on the application's shared executor. The
+// turn's stream callbacks are captured into a thread-safe queue that `poll()`
+// drains on the GUI thread, so the worker never touches a widget.
+//
+// The controller never creates a thread of its own: the application owns one
+// `multi_executor<void()>` and every controller spawns onto it.
 class ConversationController {
 public:
-  ConversationController(lnb::core::interface& api, std::uint32_t session_id);
+  ConversationController(
+      felis::bell::client& client,
+      felis::async::multi_executor<void()>& executor,
+      std::uint32_t session_id
+  );
   ~ConversationController();
 
   ConversationController(const ConversationController&) = delete;
@@ -30,60 +36,22 @@ public:
 
   [[nodiscard]] std::uint32_t session_id() const { return session_id_; }
 
-  // The task the controller is polling, or nullptr before the first send. It
-  // is shared with the interface, so the window can identify which task belongs
-  // to which session for the running-task readout.
-  [[nodiscard]] std::shared_ptr<GenerationTask> task() const { return task_; }
+  // True while the session's turn is in flight.
+  [[nodiscard]] bool busy() const { return !handle_.finished(); }
 
-  // The session as stored (a fresh read).
-  [[nodiscard]] lnb::core::Session session() const;
+  // Persists the user message and starts the turn on the shared executor. The
+  // send is refused (nothing is appended) when the turn is busy or the text is
+  // empty. Returns whether a turn was started.
+  [[nodiscard]] bool send(std::string text);
 
-  // True while the session's task is in flight.
-  [[nodiscard]] bool busy() const;
-
-  // Progress of the in-flight turn, for the running-task readout: the tool-call
-  // round reached and how long the turn has been running. Both zero when no turn
-  // is running.
-  struct Progress {
-    std::size_t rounds = 0;
-    std::int64_t elapsed_ms = 0;
-  };
-
-  [[nodiscard]] Progress progress() const;
-
-  // Persists the user message through the interface, then starts the turn. The
-  // send is refused (nothing is appended) when the session is busy or the
-  // interface rejects the prompt (for example, a summary trigger has been met).
-  //
-  // `approver` reviews the automatic fold the new message may trigger before it
-  // is sent; an empty approver proceeds.
-  [[nodiscard]] bool send(std::string text, lnb::core::SummaryApprover approver = {});
-
-  // Resolves one summarisation level per press, the session first. `approver`
-  // reviews the proposed pass before it is sent.
-  void summarize(lnb::core::SummaryApprover approver = {});
-
-  // Folds the session's overflow into the summary on demand, forcing the pass
-  // even when the automatic trigger has not been reached.
-  //
-  // `approver` reviews the request before it is sent; the editor supplies its own
-  // so a declined review is a silent no-op. An absent approver proceeds.
-  void summarize_session_now(lnb::core::SummaryApprover approver = {});
-
-  // The last finished task's outcome and diagnostic log, retained after the worker
-  // is gone so the tasks window can show a failure and dump its log.
-  [[nodiscard]] bool has_finished_task() const;
-  [[nodiscard]] lnb::core::GenerationTask::Snapshot last_snapshot() const;
-
-  // The diagnostic log for the current task, or the last finished one when idle.
-  [[nodiscard]] std::string task_log() const;
-
-  // Requests the worker to stop. The partial reply is discarded.
+  // Requests the in-flight turn to stop. The partial reply is discarded by bell.
   void cancel();
 
-  void delete_message(std::uint32_t message_id);
+  // Removes only this one message; the messages after it stay.
   void delete_message_only(std::uint32_t message_id);
-  void edit_message(std::uint32_t message_id, std::string content);
+
+  // Removes this message and every message after it in the session.
+  void delete_message(std::uint32_t message_id);
 
   void set_on_changed(std::function<void()> handler) {
     on_changed_ = std::move(handler);
@@ -91,68 +59,50 @@ public:
   void set_on_stream(std::function<void(const std::string&)> handler) {
     on_stream_ = std::move(handler);
   }
+  void set_on_reasoning(std::function<void(const std::string&)> handler) {
+    on_reasoning_ = std::move(handler);
+  }
   void set_on_status(std::function<void(const std::string&)> handler) {
     on_status_ = std::move(handler);
   }
   void set_on_error(std::function<void(const std::string&)> handler) {
     on_error_ = std::move(handler);
   }
-  // A non-fatal notice about a turn that still completed (for example, the reply
-  // was cut off). Shown like an error, but the reply itself is kept.
-  void set_on_warning(std::function<void(const std::string&)> handler) {
-    on_warning_ = std::move(handler);
-  }
 
-  // Polls the session's own task and, when it is merely watching the shared
-  // assistant pass, that task too.
+  // Drains the worker's queued events and dispatches them on the calling (GUI)
+  // thread. Call from the window's poll timer.
   void poll();
 
 private:
-  // Adopts a task returned by the interface and resets the per-task polling
-  // bookkeeping. Returns false when the interface refused to start one.
-  //
-  // `summarization` marks a fold pass: its streamed text is the summary itself
-  // and its status is "Updating summarization...", both of which belong to the
-  // task log in the Tasks window, never to the transcript.
-  bool track(std::shared_ptr<GenerationTask> task, bool summarization = false);
+  enum class event_kind { text, reasoning, status, done_ok, done_error };
 
-  // Watches the shared assistant pass without adopting it as the session's own
-  // task. It is polled only to reload once it ends, so the composer can resolve
-  // its summarize mode; it must never become `task_`, or the Tasks window would
-  // list a phantom session row mirroring the assistant's numbers.
-  void observe(std::shared_ptr<GenerationTask> task);
+  struct event {
+    event_kind kind;
+    std::string text;
+  };
 
-  void finish_worker();
+  // Shared with the worker's event lambdas so a push after this controller is
+  // destroyed still lands in live memory (the worker may outlive the widget).
+  struct shared_state {
+    std::mutex mutex;
+    std::vector<event> events;
+  };
 
-  lnb::core::interface& api_;
+  void push(event_kind kind, std::string_view text);
+
+  felis::bell::client& client_;
+  felis::async::multi_executor<void()>& executor_;
   std::uint32_t session_id_;
 
-  // The session's own turn or fold, returned by interface::start_generation()
-  // or interface::summarize_session(). The shared assistant pass is kept in
-  // `observed_task_` instead, because it belongs to every session at once.
-  std::shared_ptr<GenerationTask> task_;
+  std::shared_ptr<shared_state> state_ = std::make_shared<shared_state>();
 
-  // The shared assistant pass this controller is watching, if any. It has its
-  // own reported flag so a session task and a watched pass never share one.
-  std::shared_ptr<GenerationTask> observed_task_;
-  bool observed_reported_ = false;
-
-  // True once finish_worker() has run for task_, so the terminal state is
-  // reported exactly once.
-  bool reported_ = false;
-
-  // True while task_ is a summarization fold rather than a chat turn, so its
-  // streamed summary text is not rendered as a reply in the transcript.
-  bool task_is_summarization_ = false;
-
-  std::string last_display_;
-  std::string last_status_;
+  felis::async::multi_executor<void()>::handle handle_;
 
   std::function<void()> on_changed_;
   std::function<void(const std::string&)> on_stream_;
+  std::function<void(const std::string&)> on_reasoning_;
   std::function<void(const std::string&)> on_status_;
   std::function<void(const std::string&)> on_error_;
-  std::function<void(const std::string&)> on_warning_;
 };
 
 } // namespace ui

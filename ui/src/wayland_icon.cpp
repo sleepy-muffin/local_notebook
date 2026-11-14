@@ -32,7 +32,7 @@
 
 #include <QtGui/qguiapplication_platform.h>
 
-#include "shark/log.hpp"
+#include "felis/log.hpp"
 #include "ui/theme.hpp"
 #include "wayland/xdg-toplevel-icon-v1-client-protocol.h"
 
@@ -198,7 +198,7 @@ void add_image(IconState& state, const QPixmap& pixmap) {
   const int fd = create_shm_fd(size);
 
   if (fd < 0) {
-    shark::log::debug("wayland icon: could not create shared memory for {}px", width);
+    felis::log::debug("wayland icon: could not create shared memory for {}px", width);
     return;
   }
 
@@ -410,7 +410,7 @@ void install_wayland_toplevel_icon(QApplication& application) {
   auto* installer = new WaylandIconInstaller(application);
 
   if (!installer->initialize(display)) {
-    shark::log::debug("wayland icon: xdg-toplevel-icon-v1 unavailable, "
+    felis::log::debug("wayland icon: xdg-toplevel-icon-v1 unavailable, "
                       "leaving the window icon to Qt");
     delete installer;
     return;

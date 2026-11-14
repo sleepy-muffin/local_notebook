@@ -5,6 +5,8 @@
 #include <cstdint>
 #include <unordered_map>
 
+#include <felis/async.hpp>
+
 #include "ui/BackgroundWidget.hpp"
 
 class QEvent;
@@ -19,8 +21,8 @@ namespace lnb {
 struct Settings;
 }
 
-namespace lnb::core {
-class interface;
+namespace felis::bell {
+class client;
 }
 
 namespace ui {
@@ -29,7 +31,6 @@ class ConversationView;
 class SessionItemDelegate;
 class SessionListModel;
 class SettingsWindow;
-class TasksWindow;
 
 // The application shell: one full-width title bar across the top, a sidebar of
 // sessions on the left and the transcript on the right. It owns the lazily
@@ -38,8 +39,8 @@ class TasksWindow;
 class MainWindow : public BackgroundWidget {
 public:
   explicit MainWindow(
-      lnb::core::interface& api, lnb::Settings& settings,
-      QWidget* parent = nullptr
+      felis::bell::client& api, lnb::Settings& settings,
+      felis::async::multi_executor<void()>& executor, QWidget* parent = nullptr
   );
   ~MainWindow() override;
 
@@ -57,60 +58,34 @@ private:
   QWidget* build_right_pane();
   QWidget* build_status_bar();
 
-  // Builds one session list (view + model + delegate) with the shared row
-  // behaviour: hover actions (pin / edit / delete) and click-to-open. Returns the
-  // view and hands back the model and delegate it created.
   QListView* build_session_list(
       QWidget* parent, const QString& object_name, SessionListModel*& model,
       SessionItemDelegate*& delegate
   );
 
-  // (Re)builds the window's scoped stylesheet from the current theme, so a
-  // theme change in the settings window is reflected in the hand-painted chrome.
   void apply_window_style();
-
-  // Rebuilds the sidebar list from the database and prunes views for sessions
-  // that no longer exist.
   void refresh_sessions();
-
-  // Opens (creating on first use) the chat pane for `session_id`.
   void open_conversation(std::uint32_t session_id);
-
-  // Returns the chat pane that owns `session_id`'s background worker, creating it
-  // on first use without switching the visible pane. Returns nullptr when the
-  // session does not exist. Used by open_conversation() and to hand the session
-  // editor the view it drives its manual summarisation through.
   ConversationView* ensure_conversation_view(std::uint32_t session_id);
 
   void new_session();
   void open_settings();
 
-  // The session row's hover actions: pin toggles the pinned flag, edit opens the
-  // session editor, delete asks for confirmation and then removes the session.
   void pin_session(std::uint32_t session_id);
   void edit_session(std::uint32_t session_id);
   void delete_session(std::uint32_t session_id);
 
   void poll_conversations();
 
-  // The status bar: toggles the sidebar's visibility, and opens the window that
-  // lists the running generation tasks.
   void toggle_sidebar();
-  // Repaints the sidebar toggle's icon: accent while the sidebar is shown, muted
-  // while it is hidden.
   void refresh_sidebar_toggle();
-  void update_task_indicator();
-  void open_tasks_window();
 
-  // Refreshes the title bar: session name, id, context usage and last-message
-  // time of the current session.
   void update_header();
-
-  // Refreshes the current-session block at the foot of the sidebar.
   void update_current_block();
 
-  lnb::core::interface& api_;
+  felis::bell::client& api_;
   lnb::Settings& settings_;
+  felis::async::multi_executor<void()>& executor_;
 
   QWidget* sidebar_ = nullptr;
   QWidget* sidebar_separator_ = nullptr;
@@ -119,13 +94,6 @@ private:
   QListView* sessions_view_ = nullptr;
   SessionListModel* sessions_model_ = nullptr;
   SessionItemDelegate* sessions_delegate_ = nullptr;
-
-  // The pinned category, above SESSIONS. The band (its category label plus its
-  // list) is hidden entirely while no session is pinned.
-  QWidget* pinned_band_ = nullptr;
-  QListView* pinned_view_ = nullptr;
-  SessionListModel* pinned_model_ = nullptr;
-  SessionItemDelegate* pinned_delegate_ = nullptr;
 
   QPushButton* new_session_button_ = nullptr;
 
@@ -137,7 +105,6 @@ private:
   QLabel* category_ = nullptr;
 
   QLabel* header_subtitle_ = nullptr;
-  QLabel* header_summarization_trigger_ = nullptr;
   QLabel* header_time_ = nullptr;
 
   QStackedWidget* workspace_ = nullptr;
@@ -146,19 +113,7 @@ private:
   QTimer* poll_timer_ = nullptr;
   SettingsWindow* settings_window_ = nullptr;
 
-  // The status bar's right-hand running-task indicator, and the unique,
-  // non-modal window it opens.
-  QToolButton* task_indicator_ = nullptr;
   QToolButton* sidebar_toggle_ = nullptr;
-  TasksWindow* tasks_window_ = nullptr;
-  int shown_task_count_ = -1;
-
-  // The last observed assistant-memory trigger, compared each poll so every
-  // composer is told to re-evaluate only when the shared flag actually flips.
-  bool last_assistant_due_ = false;
-  // The last observed shared-assistant task state, so every composer is barred
-  // from sending (or released) the moment the assistant fold starts or finishes.
-  bool last_assistant_busy_ = false;
 
   std::uint32_t current_session_ = 0;
   std::unordered_map<std::uint32_t, ConversationView*> conversations_;

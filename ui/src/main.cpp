@@ -4,13 +4,18 @@
 #include <QStringList>
 
 #include <algorithm>
+#include <exception>
 #include <filesystem>
 #include <string>
+#include <utility>
 #include <vector>
 
-#include "local_notebook/core/interface.hpp"
+#include <felis/async.hpp>
+
+#include "client.hpp"
+#include "store.hpp"
+#include "felis/log.hpp"
 #include "settings/settings.hpp"
-#include "shark/log.hpp"
 #include "support/i18n.hpp"
 #include "ui/AssistantPicker.hpp"
 #include "ui/MainWindow.hpp"
@@ -19,9 +24,7 @@
 
 namespace {
 
-// The per-user application data directory, or the --user-data override. This is
-// resolved in the UI because it is the only place that knows about Qt's
-// platform-specific locations; the core only receives the resulting root.
+// The per-user application data directory, or the --user-data override.
 std::filesystem::path resolve_data_root(const QStringList &arguments) {
   for (int i = 1; i < arguments.size(); ++i) {
     const QString &argument = arguments.at(i);
@@ -44,73 +47,63 @@ std::filesystem::path resolve_data_root(const QStringList &arguments) {
 } // namespace
 
 int main(int argc, char **argv) {
-  // The theme and the icons live in assets/local_notebook.qrc, which is compiled
-  // into the local_notebook::ui static library. The linker drops a resource
-  // object that nothing references, so without this call ":/themes/theme.json"
-  // does not exist and a launch whose working directory has no themes/theme.json
-  // gets the empty fallback theme (black colours). Q_INIT_RESOURCE pulls the
-  // generated resource object into the executable.
-  Q_INIT_RESOURCE(local_notebook);
-
   QApplication app(argc, argv);
   QApplication::setApplicationName(QStringLiteral("Local Notebook"));
   QApplication::setApplicationVersion(QStringLiteral("0.1.0"));
 
-  // The bundled artwork becomes the icon of every window (the picker, the main
-  // window and any dialog) for the platforms where that is enough. On Wayland it
-  // is only the client-side decoration's icon: see install_wayland_toplevel_icon.
   QApplication::setWindowIcon(ui::application_icon());
-
-  // A native Wayland client has no desktop entry to point the compositor at and
-  // Qt 6.8 does not speak xdg-toplevel-icon-v1, so hand the icon to the
-  // compositor directly. No-op off Wayland or if the protocol is unavailable.
   ui::install_wayland_toplevel_icon(app);
 
-  // Point the whole on-disk tree at the per-user application data directory, or at
-  // the --user-data override. This must run before the settings are read.
   const std::filesystem::path data_root = resolve_data_root(app.arguments());
-  shark::log::info("data root: {}", data_root.string());
+  felis::log::info("data root: {}", data_root.string());
 
-  auto interface = std::make_unique<lnb::core::interface>(data_root);
+  felis::bell::store store(data_root);
 
-  lnb::Settings settings = lnb::load_settings(*interface);
+  lnb::Settings settings = lnb::load_settings(store);
 
-  // Select the stored UI language before any window is created, so every string
-  // is looked up in the right language the first time it is built.
   lnb::i18n::set_language(lnb::i18n::language_from_code(settings.language));
-
-  // Install the theme before any window is created.
   ui::apply_theme(app, settings);
 
-
   // Reopen the last assistant when auto-login is on and it is still on disk;
-  // otherwise ask.
-  const std::string last = settings.last_assistant;
-  bool opened = false;
+  // otherwise ask. The picker works off the store; the client, which owns exactly
+  // one assistant, is built only after a selection is made.
+  std::string uuid = settings.last_assistant;
+  const std::vector<std::string> uuids = store.scan_assistants();
+  const bool reopen = settings.auto_login && !uuid.empty() &&
+                      std::find(uuids.begin(), uuids.end(), uuid) != uuids.end();
 
-  if (settings.auto_login && !last.empty()) {
-    const std::vector<std::string> uuids = interface->get_store().scan_assistants();
-
-    if (std::find(uuids.begin(), uuids.end(), last) != uuids.end()) {
-      opened = interface->open_assistant(last).has_value();
-    }
-  }
-
-  if (!opened) {
-    ui::AssistantPicker picker(*interface, settings);
+  if (!reopen) {
+    ui::AssistantPicker picker(store, settings);
 
     if (picker.exec() != QDialog::Accepted) {
       return 0;
     }
+
+    uuid = settings.last_assistant;
   }
 
-  ui::MainWindow window(*interface, settings);
-  window.show();
+  if (uuid.empty()) {
+    return 0;
+  }
 
-  const int code = app.exec();
+  // The turn runs on this shared executor; no task ever creates its own thread.
+  felis::async::multi_executor<void()> executor(2);
 
-  lnb::save_settings(*interface, settings);
-  interface->wait_for_generation();
-  shark::log::debug("local-notebook exited with code {}", code);
-  return code;
+  try {
+    felis::bell::client client(std::move(store), uuid);
+
+    ui::MainWindow window(client, settings, executor);
+    window.show();
+
+    const int code = app.exec();
+
+    lnb::save_settings(client.get_store(), settings);
+    executor.shutdown();
+    felis::log::debug("local-notebook exited with code {}", code);
+    return code;
+  } catch (const std::exception &error) {
+    felis::log::error("cannot open assistant {}: {}", uuid, error.what());
+    executor.shutdown();
+    return 1;
+  }
 }

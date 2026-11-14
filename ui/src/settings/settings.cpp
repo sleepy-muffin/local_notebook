@@ -9,8 +9,8 @@
 
 #include <filesystem>
 
-#include "local_notebook/core/interface.hpp"
-#include "shark/log.hpp"
+#include "store.hpp"
+#include "felis/log.hpp"
 
 namespace lnb {
 namespace {
@@ -149,7 +149,13 @@ Settings from_json(const QJsonObject& object) {
   }
   settings.background_override = override_from_json(object.value("background_override"));
 
-  settings.ui_font = object.value("ui_font").toString().toStdString();
+  // Only override the default interface font when the stored value names a real
+  // family. An empty string (a legacy settings file, or the old "system
+  // default" sentinel) must not clobber the Carlito default.
+  const QString ui_font = object.value("ui_font").toString();
+  if (!ui_font.isEmpty()) {
+    settings.ui_font = ui_font.toStdString();
+  }
   settings.ui_font_size = object.value("ui_font_size").toInt(settings.ui_font_size);
   settings.font = object.value("font").toString().toStdString();
   settings.font_size = object.value("font_size").toInt(settings.font_size);
@@ -192,8 +198,8 @@ std::string default_language_code() {
   }
 }
 
-Settings load_settings(const lnb::core::interface& api) {
-  const auto path = api.get_store().global_settings_path();
+Settings load_settings(const felis::bell::store& store) {
+  const auto path = store.global_settings_path();
 
   QFile file(QString::fromStdString(path.string()));
   if (!file.open(QIODevice::ReadOnly)) {
@@ -202,22 +208,22 @@ Settings load_settings(const lnb::core::interface& api) {
 
   const QJsonDocument document = QJsonDocument::fromJson(file.readAll());
   if (!document.isObject()) {
-    shark::log::error("{} is not a JSON object; using defaults", path.string());
+    felis::log::error("{} is not a JSON object; using defaults", path.string());
     return default_settings();
   }
 
   return from_json(document.object());
 }
 
-void save_settings(const lnb::core::interface& api, const Settings& settings) {
-  const auto path = api.get_store().global_settings_path();
+void save_settings(const felis::bell::store& store, const Settings& settings) {
+  const auto path = store.global_settings_path();
 
   std::error_code error;
   std::filesystem::create_directories(path.parent_path(), error);
 
   QFile file(QString::fromStdString(path.string()));
   if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-    shark::log::error("cannot write {}", path.string());
+    felis::log::error("cannot write {}", path.string());
     return;
   }
 

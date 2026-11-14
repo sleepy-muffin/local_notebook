@@ -1,0 +1,48 @@
+#pragma once
+
+#include <string>
+#include <optional>
+#include <cstdint>
+
+#include "common.hpp"
+
+namespace felis::bell{
+
+struct shadowed_message{
+
+  shadowed_message(uint32_t id, const std::string& content, message_kind kind) : id_(id), content_(content), kind_(kind) {}
+  shadowed_message(const std::string& content, message_kind kind) : content_(content), kind_(kind) {}
+  shadowed_message(
+    const std::string& content,
+    message_kind kind,
+    const tool_call_info& tool_call
+  ) : content_(content), kind_(kind), tool_call_(tool_call) {}
+
+  uint32_t id_;
+  std::string content_;
+  std::optional<std::string> reasoning_payload_;
+
+  uint32_t session_id_;
+
+  message_kind kind_;
+
+
+  // ISO-8601 UTC; sortable, so sessions can be
+  // interleaved by time for assistant memory
+  // std::string made_at_;
+
+  std::optional<tool_call_info> tool_call_;
+
+};
+
+struct shadowed_session{
+  uint32_t id_;
+  std::string title_;
+  // Pinned sessions get their own sidebar band above the rest.
+  bool pinned_ = false;
+
+  shadowed_session(uint32_t id, const std::string title, bool pinned = false)
+    : id_(id), title_(title), pinned_(pinned) {}
+};
+
+}

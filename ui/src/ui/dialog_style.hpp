@@ -67,6 +67,36 @@ inline QString dialog_stylesheet(const QString& object_name) {
   sheet += QStringLiteral(
                "QListWidget#AssistantList, QListWidget#SettingsNav, QListWidget#SessionNav {"
                " border: none; outline: none; }");
+  // The assistant picker's rows use the same low-contrast hover/selection
+  // shading as the sidebar session list (see ui::row_hover_background /
+  // row_selected_background). Without these rules the QListWidget falls back to
+  // the platform's default highlight and tight, unpadded rows, which is what
+  // made the picker look raw next to the rest of the chrome.
+  sheet += QStringLiteral(
+               "QListWidget#AssistantList::item {"
+               "  padding: 8px 10px; border-radius: 6px; }");
+  sheet += QStringLiteral("QListWidget#AssistantList::item:hover { background: %1; }")
+               .arg(colour_hex(row_hover_background()));
+  sheet += QStringLiteral(
+               "QListWidget#AssistantList::item:selected { background: %1; color: %2; }")
+               .arg(colour_hex(row_selected_background()), text);
+  // The settings window's left rail is the same kind of list. Without item rules
+  // its entries collapse to the platform's minimal text rows, which reads as
+  // tiny compared with the rest of the chrome; give them the shared row padding
+  // and the low-contrast hover/selected shading the session list uses.
+  sheet += QStringLiteral(
+               "QListWidget#SettingsNav, QListWidget#SessionNav { padding: 6px; }");
+  sheet += QStringLiteral(
+               "QListWidget#SettingsNav::item, QListWidget#SessionNav::item {"
+               "  padding: 8px 10px; border-radius: 6px; }");
+  sheet += QStringLiteral(
+               "QListWidget#SettingsNav::item:hover, QListWidget#SessionNav::item:hover {"
+               "  background: %1; }")
+               .arg(colour_hex(row_hover_background()));
+  sheet += QStringLiteral(
+               "QListWidget#SettingsNav::item:selected, QListWidget#SessionNav::item:selected {"
+               "  background: %1; color: %2; }")
+               .arg(colour_hex(row_selected_background()), text);
   // The scroll area keeps the dialog canvas (the window colour) in its frame
   // region without painting a background of its own: a `background: transparent`
   // here would be resolved into the scroll area's palette, which Breeze paints

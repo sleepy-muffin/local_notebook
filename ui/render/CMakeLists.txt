@@ -2,17 +2,20 @@
 # It deliberately has no Qt dependency; the UI supplies a Qt-backed
 # TextBackend/Canvas, and the tests supply a fixed-width fake. Keeping this
 # library pure is what makes the geometry testable without a display server.
-local_notebook_add_module(render STATIC
-        SOURCES
+add_library(render STATIC
         include/render/types.hpp
         include/render/document.hpp
         include/render/backend.hpp
         include/render/layout.hpp
         src/layout.cpp
+)
 
-        PUBLIC_INCLUDES
+target_include_directories(render
+        PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
+
+add_library(local_notebook::render ALIAS render)
 
 # ========== ---------- ---------- ---------- ==========
 #                         CTESTS
@@ -26,7 +29,7 @@ add_executable(
 target_link_libraries(
         render-layout-test
         PRIVATE
-        local_notebook::render
+        render
 )
 
 add_test(NAME render-layout COMMAND render-layout-test)

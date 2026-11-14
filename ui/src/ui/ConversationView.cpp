@@ -1,10 +1,8 @@
 #include "ui/ConversationView.hpp"
 
-#include "ui/SummaryReviewDialog.hpp"
-
+#include <QAbstractButton>
 #include <QApplication>
 #include <QClipboard>
-#include <QCursor>
 #include <QDateTime>
 #include <QEnterEvent>
 #include <QFontMetrics>
@@ -27,11 +25,11 @@
 
 #include <algorithm>
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "local_notebook/core/interface.hpp"
-#include "local_notebook/core/context.hpp"
+#include "client.hpp"
 #include "settings/settings.hpp"
 #include "support/i18n.hpp"
 #include "ui/MessageDocument.hpp"
@@ -43,7 +41,6 @@ namespace ui {
 
 namespace {
 
-// Formats a QColor for use inside a stylesheet, alpha included.
 QString css_color(const QColor& color) {
   return QStringLiteral("rgba(%1, %2, %3, %4)")
       .arg(color.red())
@@ -59,59 +56,6 @@ QString from_utf8(const std::string& value) {
 std::u16string to_u16(const QString& value) {
   return std::u16string(
       reinterpret_cast<const char16_t*>(value.utf16()), static_cast<std::size_t>(value.size()));
-}
-
-// Picks the shortest stamp that still identifies the moment: today shows the
-// clock only, the current year drops the year, older times keep the full date.
-QString compact_time_format(const QDateTime& local) {
-  const QDate today = QDate::currentDate();
-  const QDate date = local.date();
-
-  if (date == today) {
-    return QStringLiteral("HH:mm");
-  }
-
-  if (date.year() == today.year()) {
-    return QStringLiteral("MM-dd HH:mm");
-  }
-
-  return QStringLiteral("yyyy-MM-dd HH:mm");
-}
-
-// A stored message's arrival time (ISO-8601 UTC) in the reader's local time. An
-// empty or unparsable value yields an empty string, so notice rows stay bare.
-//
-// The metadata row is narrow, so the stamp is abbreviated: only the clock time
-// for today, month and day for the current year, and the full date otherwise.
-QString format_message_time(const std::string& iso) {
-  if (iso.empty()) {
-    return {};
-  }
-
-  const QDateTime parsed = QDateTime::fromString(from_utf8(iso), Qt::ISODate);
-
-  if (!parsed.isValid()) {
-    return {};
-  }
-
-  return parsed.toLocalTime().toString(compact_time_format(parsed.toLocalTime()));
-}
-
-// The estimated token cost of one message, on the same compact scale as the
-// title bar's readout, with a unit suffix so the value in the hover strip cannot
-// be mistaken for the id or the time.
-QString format_token_estimate(std::size_t tokens) {
-  if (tokens < 1000) {
-    return trs("%1 tok").arg(static_cast<qulonglong>(tokens));
-  }
-
-  const double thousands = static_cast<double>(tokens) / 1000.0;
-
-  if (tokens % 1000 == 0 || tokens >= 100000) {
-    return trs("%1k tok").arg(qRound(thousands));
-  }
-
-  return trs("%1k tok").arg(thousands, 0, 'f', 1);
 }
 
 // Streaming Markdown is re-rendered at most this often (ms), so a long reply is
@@ -145,9 +89,8 @@ public:
     setFixedHeight(28);
   }
 
-  // Shows `current` and offers `levels`. A level not present in `levels` is not
-  // shown (the caller builds the list with reasoning_efforts_with_stored so the
-  // stored value is always included).
+  // Shows `current` and offers `levels`. The stored value is always included by
+  // the caller, so a level the model no longer lists is still shown.
   void set_levels(const std::vector<std::string>& levels, const std::string& current) {
     levels_ = levels;
     current_ = current;
@@ -262,22 +205,15 @@ private:
   bool menu_open_ = false;
 };
 
-// -----------------------------------------------------------------------------
-// ConversationView
-// -----------------------------------------------------------------------------
-
 ConversationView::ConversationView(
-    lnb::core::interface& api, const lnb::Settings& settings, std::uint32_t session_id,
-    QWidget* parent)
+    felis::bell::client& api, const lnb::Settings& settings, std::uint32_t session_id,
+    felis::async::multi_executor<void()>& executor, QWidget* parent)
     : QWidget(parent), api_(api), settings_(settings), session_id_(session_id),
-      controller_(api, session_id) {
+      controller_(api, executor, session_id) {
   const lnb::ThemeMetrics& m = metrics();
 
-  // The pane paints its own background (the conversation surface), so the
-  // stylesheet must be allowed to fill it.
   setObjectName(QStringLiteral("ConversationView"));
   setAttribute(Qt::WA_StyledBackground, true);
-
   setMinimumWidth(0);
   setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Minimum);
 
@@ -285,14 +221,11 @@ ConversationView::ConversationView(
   layout->setContentsMargins(0, 0, 0, 0);
   layout->setSpacing(0);
 
-  // One custom-painted canvas holds every message. Reaching the top pages in
-  // older history automatically; there is no "Load earlier" button and no
-  // widget tree whose insertion could race the scroll position.
   transcript_ = new TranscriptCanvas(this);
   transcript_->set_on_reach_top([this]() { load_older(); });
 
   transcript_->set_on_copy([this](std::uint32_t message_id) {
-    for (const lnb::core::Message& message: messages_) {
+    for (const felis::bell::shadowed_message& message: messages_) {
       if (message.id_ == message_id) {
         QApplication::clipboard()->setText(from_utf8(message.content_));
         return;
@@ -301,7 +234,7 @@ ConversationView::ConversationView(
   });
 
   transcript_->set_on_edit([this](std::uint32_t message_id) {
-    for (const lnb::core::Message& message: messages_) {
+    for (const felis::bell::shadowed_message& message: messages_) {
       if (message.id_ == message_id) {
         prompt_edit(message_id, from_utf8(message.content_));
         return;
@@ -313,17 +246,15 @@ ConversationView::ConversationView(
     QMessageBox dialog(
         QMessageBox::Warning, trs("Delete Message"),
         trs("Are you sure you want to delete this message?"), QMessageBox::NoButton,
-        this
-    );
+        this);
     dialog.setInformativeText(trs(
         "Delete This Message removes only it. Delete This and Following removes it "
-        "and every message after it. This cannot be undone."
-    ));
+        "and every message after it. This cannot be undone."));
 
     QAbstractButton* only =
         dialog.addButton(trs("Delete This Message"), QMessageBox::DestructiveRole);
-    QAbstractButton* following = dialog.addButton(
-        trs("Delete This and Following"), QMessageBox::DestructiveRole);
+    QAbstractButton* following =
+        dialog.addButton(trs("Delete This and Following"), QMessageBox::DestructiveRole);
     QPushButton* cancel = dialog.addButton(QMessageBox::Cancel);
     dialog.setDefaultButton(cancel);
     dialog.exec();
@@ -332,14 +263,6 @@ ConversationView::ConversationView(
       controller_.delete_message_only(message_id);
     } else if (dialog.clickedButton() == following) {
       controller_.delete_message(message_id);
-    }
-  });
-
-  transcript_->set_on_branch([this](std::uint32_t message_id) {
-    const std::uint32_t new_id = api_.branch_session(session_id_, message_id);
-
-    if (new_id != 0 && on_branch_) {
-      on_branch_(new_id);
     }
   });
 
@@ -369,9 +292,6 @@ ConversationView::ConversationView(
   auto* buttons = new QVBoxLayout();
   buttons->setSpacing(4);
 
-  // The expand toggle sits at the field's top-right; the send and cancel actions
-  // at the block's bottom-right, the way Zed places its composer action. All three
-  // are icon-only, flat, and share the send button's 28x28 footprint.
   expand_button_ = new QToolButton(composer);
   expand_button_->setObjectName(QStringLiteral("ComposerExpand"));
   expand_button_->setToolButtonStyle(Qt::ToolButtonIconOnly);
@@ -390,7 +310,6 @@ ConversationView::ConversationView(
   send_button_->setFocusPolicy(Qt::NoFocus);
   send_button_->setCursor(Qt::PointingHandCursor);
 
-  // Cancel replaces the send action while a turn runs, so it is icon-only too.
   cancel_button_ = new QToolButton(composer);
   cancel_button_->setObjectName(QStringLiteral("CancelButton"));
   cancel_button_->setToolButtonStyle(Qt::ToolButtonIconOnly);
@@ -404,19 +323,20 @@ ConversationView::ConversationView(
   buttons->addWidget(expand_button_, 0, Qt::AlignTop | Qt::AlignRight);
   buttons->addStretch(1);
 
+  auto* bottom_actions = new QHBoxLayout();
+  bottom_actions->setContentsMargins(0, 0, 0, 0);
+  bottom_actions->setSpacing(2);
+  bottom_actions->addStretch(1);
+
   // The reasoning control sits immediately to the left of the send button, at the
   // block's bottom-right. Reading it as part of the composer, it is borderless and
   // fully transparent; the group it belongs to takes width from the input field.
   reasoning_selector_ = new ReasoningSelector(composer);
   reasoning_selector_->set_on_selected([this](const std::string& level) {
-    api_.set_session_reasoning_effort(session_id_, level);
+    api_.set_session_reasoning_effort(felis::bell::size_type(session_id_), level);
     refresh_reasoning_selector();
   });
 
-  auto* bottom_actions = new QHBoxLayout();
-  bottom_actions->setContentsMargins(0, 0, 0, 0);
-  bottom_actions->setSpacing(2);
-  bottom_actions->addStretch(1);
   bottom_actions->addWidget(reasoning_selector_, 0, Qt::AlignVCenter);
   bottom_actions->addWidget(send_button_, 0, Qt::AlignVCenter);
   bottom_actions->addWidget(cancel_button_, 0, Qt::AlignVCenter);
@@ -426,9 +346,6 @@ ConversationView::ConversationView(
   composer_layout->addWidget(input_, 1);
   composer_layout->addLayout(buttons);
 
-  // The small failure notice lives just above the composer, so it reads as a
-  // remark on the turn rather than part of the transcript. It is hidden until a
-  // turn fails.
   notice_ = new StatusNotice(this);
   layout->addWidget(notice_);
 
@@ -437,21 +354,17 @@ ConversationView::ConversationView(
   apply_composer_style();
   apply_composer_height();
 
-  // Coalesces streaming updates so Markdown is re-rendered at a steady rate
-  // instead of once per token.
+  refresh_reasoning_selector();
+
   stream_timer_ = new QTimer(this);
   stream_timer_->setSingleShot(true);
   stream_timer_->setInterval(kStreamRenderMs);
-
   connect(stream_timer_, &QTimer::timeout, this, [this]() { flush_streaming_text(); });
 
   connect(expand_button_, &QToolButton::clicked, this, [this]() { toggle_composer_height(); });
-
   connect(send_button_, &QToolButton::clicked, this, [this]() { submit(); });
-
   connect(cancel_button_, &QToolButton::clicked, this, [this]() { controller_.cancel(); });
 
-  // The controller reports the turn's progress; the view renders it.
   controller_.set_on_changed([this]() {
     reload();
     if (on_changed_) {
@@ -460,19 +373,25 @@ ConversationView::ConversationView(
   });
 
   controller_.set_on_stream([this](const std::string& text) {
-    // The first token creates the reply on the canvas; later ones only replace
-    // its blocks, leaving the rest of the transcript shaped as-is.
     if (!streaming_started_) {
       streaming_started_ = true;
       transcript_->begin_streaming();
     }
 
-    pending_stream_text_ = text.empty() ? streaming_status_ : from_utf8(text);
+    // `on_text` delivers incremental deltas (one per streamed token/chunk), so
+    // they must be accumulated here. Assigning would keep only the newest
+    // fragment, which is why a reply used to show just the last token (often a
+    // stray `.`) until the turn finished and the DB round-trip rebuilt it.
+    pending_stream_text_ += from_utf8(text);
     has_pending_stream_ = true;
 
     if (!stream_timer_->isActive()) {
       stream_timer_->start();
     }
+  });
+
+  controller_.set_on_reasoning([this](const std::string&) {
+    // Reasoning is not shown in the transcript; it is context work only.
   });
 
   controller_.set_on_status([this](const std::string& status) {
@@ -483,8 +402,10 @@ ConversationView::ConversationView(
       transcript_->begin_streaming();
     }
 
+    // Status is only a placeholder shown until the reply text starts arriving;
+    // it must not be mixed into the accumulated reply (see the flush below,
+    // which prefers reply text and falls back to this status).
     if (pending_stream_text_.isEmpty()) {
-      pending_stream_text_ = streaming_status_;
       has_pending_stream_ = true;
 
       if (!stream_timer_->isActive()) {
@@ -493,33 +414,19 @@ ConversationView::ConversationView(
     }
   });
 
-  controller_.set_on_error([this](const std::string&) {
-    // The reason itself now lives in the tasks window, where it can be read in
-    // full and does not vanish on the next reload; the transcript only raises the
-    // small nudge above the composer and points at the status bar's tasks icon.
+  controller_.set_on_error([this](const std::string& reason) {
     if (notice_ != nullptr) {
-      notice_->set_content(
-          QStringLiteral("tasks"),
-          trs("A generation task failed. Open the tasks window from the status bar "
-              "to see why."));
+      notice_->set_content(QStringLiteral("warning"), from_utf8(reason));
     }
   });
-
-  controller_.set_on_warning(
-      [this](const std::string& text) { pending_warning_ = from_utf8(text); });
 
   reload();
 }
 
 void ConversationView::reload() {
-  // Remember the reader's place before the document is replaced: following
-  // content is only ever a consequence of having been parked at the bottom, and a
-  // rebuild must not yank someone who had scrolled away back to the end.
   const TranscriptCanvas::ScrollAnchor anchor = transcript_->anchor();
   const bool follow = transcript_->at_bottom();
 
-  // A finished turn has been stored as a message, so the streamed preview is
-  // superseded; the next turn starts a fresh one.
   if (stream_timer_ != nullptr) {
     stream_timer_->stop();
   }
@@ -529,83 +436,59 @@ void ConversationView::reload() {
   streaming_status_.clear();
   streaming_started_ = false;
 
-  messages_ = api_.messages(session_id_);
+  messages_ = api_.messages(felis::bell::size_type(session_id_));
 
-  // Render only the tail window. The rest stays in memory but out of the
-  // renderer, so the per-reload cost is bounded no matter how long the
-  // conversation grows. Older pages are paged in on demand.
-  const std::size_t limit = static_cast<std::size_t>(std::max(1, settings_.rendered_message_limit));
+  const std::size_t limit =
+      static_cast<std::size_t>(std::max(1, settings_.rendered_message_limit));
   window_start_ = messages_.size() > limit ? messages_.size() - limit : 0;
 
   rebuild_transcript(anchor, follow);
 
-  // The warning has been folded into the document; a later reload must not show
-  // it again.
-  pending_warning_.clear();
-
   set_busy(controller_.busy());
-  update_send_mode();
   refresh_reasoning_selector();
 }
 
 render::Document ConversationView::build_document() const {
   render::Document document;
 
-  // The next request sends every message from the newest one back to where
-  // summary_trigger_tokens_ runs out (plan_window), so each message can report
-  // how much newer material travels with it.
-  const lnb::core::Session session = controller_.session();
-  const std::size_t trigger = session.summary_trigger_tokens_;
-
-  auto the_window = lnb::core::plan_window(messages_, session.summary_trigger_tokens_);
-
   for (std::size_t i = window_start_; i < messages_.size(); ++i) {
-    std::u16string status;
-
-    if (i >= the_window.start) {
-      status = to_u16(
-          trs("verbatim: %1/%2")
-              .arg(static_cast<qulonglong>(the_window.accumulated[i - the_window.start]))
-              .arg(static_cast<qulonglong>(trigger))
-      );
-    } else {
-      status = to_u16(trs("inactive"));
-    }
-
-    append_rendered_message(document, messages_[i], std::move(status));
-  }
-
-  // A warning from the last finished turn is rendered after the transcript, then
-  // cleared by rebuild_transcript so a later reload does not show it again. A
-  // failure is not shown here: its reason lives in the tasks window, and the
-  // composer notice points there.
-  if (!pending_warning_.isEmpty()) {
-    render::MessageMeta meta;
-    meta.role = render::Role::Notice;
-    append_message(document, std::move(meta), make_plain_blocks(pending_warning_.toStdString()));
+    append_rendered_message(document, messages_[i]);
   }
 
   return document;
 }
 
 void ConversationView::append_rendered_message(
-    render::Document& document, const lnb::core::Message& message, std::u16string status) const {
-  const bool from_self = message.role_ == lnb::core::Role::User;
-  const render::Role role = from_self ? render::Role::User : render::Role::Assistant;
+    render::Document& document, const felis::bell::shadowed_message& message) const {
+  using felis::bell::message_kind;
 
+  // Only the readable turns are rendered; the tool-call plumbing and the hidden
+  // reasoning are replayed to the model but never shown in the transcript.
+  bool from_self = false;
+  bool markdown = true;
+
+  switch (message.kind_) {
+    case message_kind::user_prompt:
+      from_self = true;
+      markdown = false;
+      break;
+    case message_kind::assistant_output:
+      break;
+    case message_kind::inline_compact:
+      markdown = false;
+      break;
+    default:
+      return;
+  }
+
+  const render::Role role = from_self ? render::Role::User : render::Role::Assistant;
   const QString raw = from_utf8(message.content_);
 
   render::MessageMeta meta = make_message_meta(
-      role, message.id_, to_u16(format_message_time(message.made_at_)),
-      to_u16(format_token_estimate(api_.message_tokens(message))),
-      // Any stored message can be edited in place, replies included. Only the
-      // still-streaming reply is absent here: it has no id until it is stored.
-      message.id_ != 0, to_u16(raw));
-
-  meta.status = std::move(status);
+      role, message.id_, std::u16string{}, std::u16string{}, message.id_ != 0, to_u16(raw));
 
   auto blocks =
-      from_self ? make_plain_blocks(message.content_) : make_markdown_blocks(message.content_);
+      markdown ? make_markdown_blocks(message.content_) : make_plain_blocks(message.content_);
 
   append_message(document, std::move(meta), std::move(blocks));
 }
@@ -620,14 +503,9 @@ void ConversationView::load_older() {
     return;
   }
 
-  // The canvas keeps the reader anchored on the message they were looking at, so
-  // prepending a page never jumps the transcript.
   const TranscriptCanvas::ScrollAnchor anchor = transcript_->anchor();
-
   const std::size_t page = static_cast<std::size_t>(std::max(1, settings_.history_page_size));
-
   window_start_ = window_start_ > page ? window_start_ - page : 0;
-
   rebuild_transcript(anchor, false);
 }
 
@@ -643,15 +521,27 @@ void ConversationView::refresh_style() {
 }
 
 void ConversationView::refresh_reasoning_selector() {
-  // The stored value may name a level the current model no longer offers; the
-  // manager resolves it to the supported set and reports what is actually shown.
-  const auto stored = api_.session(session_id_);
-  const std::string current = stored.has_value() ? stored->reasoning_effort_ : std::string{};
-  // An empty value means "use the model's default", which the selector shows as
-  // the default level rather than as a blank control.
-  const std::string shown = current.empty() ? api_.default_reasoning_effort() : current;
+  if (reasoning_selector_ == nullptr) {
+    return;
+  }
 
-  reasoning_selector_->set_levels(api_.reasoning_efforts_with_stored(shown), shown);
+  // The stored value may name a level the model no longer lists; the fixed ladder
+  // below is what the composer offers, and `set_levels` shows the stored value
+  // even if it falls outside that set.
+  const std::optional<felis::bell::session> stored =
+      api_.load_session(felis::bell::size_type(session_id_));
+  std::string current = stored.has_value() ? stored->reasoning_effort() : std::string{};
+  if (current.empty()) {
+    current = "none";
+  }
+
+  static const std::vector<std::string> kLevels{"none", "low", "medium", "high"};
+  std::vector<std::string> levels = kLevels;
+  if (std::find(levels.begin(), levels.end(), current) == levels.end()) {
+    levels.push_back(current);
+  }
+
+  reasoning_selector_->set_levels(levels, current);
 }
 
 void ConversationView::flush_streaming_text() {
@@ -660,7 +550,11 @@ void ConversationView::flush_streaming_text() {
   }
 
   has_pending_stream_ = false;
-  transcript_->set_streaming_blocks(make_markdown_blocks(pending_stream_text_.toStdString()));
+  // Prefer the accumulated reply; before any text arrives, show the status note
+  // ("Compacting context…", "Running …") so the bubble is not blank.
+  const QString& rendered =
+      pending_stream_text_.isEmpty() ? streaming_status_ : pending_stream_text_;
+  transcript_->set_streaming_blocks(make_markdown_blocks(rendered.toStdString()));
 }
 
 void ConversationView::poll() {
@@ -675,9 +569,9 @@ void ConversationView::set_failure_notice_handler(std::function<void()> handler)
 }
 
 void ConversationView::set_busy(bool busy) {
-  // A task in another session no longer blocks this composer; only this
-  // session's own task and the shared assistant fold do.
-  send_button_->setEnabled(!(busy || api_.assistant_busy()));
+  if (send_button_ != nullptr) {
+    send_button_->setEnabled(!busy);
+  }
 
   if (busy_ == busy) {
     return;
@@ -686,8 +580,6 @@ void ConversationView::set_busy(bool busy) {
   busy_ = busy;
   cancel_button_->setVisible(busy);
 
-  // A new turn supersedes the last failure: drop the nudge so it cannot linger
-  // over a fresh generation.
   if (busy && notice_ != nullptr) {
     notice_->setVisible(false);
   }
@@ -696,8 +588,6 @@ void ConversationView::set_busy(bool busy) {
 void ConversationView::showEvent(QShowEvent* event) {
   QWidget::showEvent(event);
 
-  // A theme change that happened while this transcript was hidden was deferred
-  // (mark_style_stale); do the restyle now that it is on screen.
   if (style_stale_) {
     style_stale_ = false;
     refresh_style();
@@ -733,29 +623,25 @@ void ConversationView::prompt_edit(std::uint32_t message_id, const QString& curr
       this, trs("Edit message"), trs("Message:"), current, &accepted);
 
   if (accepted && edited != current) {
-    controller_.edit_message(message_id, edited.toStdString());
+    api_.edit_message(felis::bell::size_type(message_id), edited.toStdString());
+    reload();
+    if (on_changed_) {
+      on_changed_();
+    }
   }
 }
 
 void ConversationView::apply_composer_style() {
   const ThemeColors& colors = theme().colors;
 
-  // The conversation surface. A theme with a background image keeps it fully
-  // transparent, so the tinted image shows through; a plain theme uses its
-  // window colour.
   setStyleSheet(QStringLiteral("QWidget#ConversationView { background: %1; }")
                     .arg(css_color(colors.conversation_background)));
 
-  // Zed-like composer: the field is bare text on the conversation surface, and
-  // the whole block is set off from the transcript by a single hairline. No field
-  // chrome and no rounded corners. The field's own background is themeable.
   input_->setStyleSheet(QStringLiteral("QPlainTextEdit#Composer { background: %1; border: none;"
                                        " padding: 4px 2px; color: %2; }")
                             .arg(css_color(colors.input_background), css_color(colors.text)));
 
   if (composer_bar_ != nullptr) {
-    // The action buttons are flat and borderless; a hover fill is the only chrome
-    // they carry, the way Zed's composer actions behave.
     composer_bar_->setStyleSheet(
         QStringLiteral("QWidget#ComposerBar { background: transparent;"
                        " border-top: 1px solid %1; }"
@@ -775,29 +661,14 @@ void ConversationView::apply_composer_icons() {
   const ThemeColors& colors = theme().colors;
 
   if (send_button_ != nullptr) {
-    if (summarize_mode_) {
-      // The action becomes a collapse-into-summary: fold the overflow now rather
-      // than send a message into an over-long request.
-      QIcon icon = resource_icon(QStringLiteral("summarize"), colors.accent, colors.text_muted);
+    QIcon icon = resource_icon(QStringLiteral("send"), colors.accent, colors.text_muted);
 
-      if (icon.isNull()) {
-        icon = style()->standardIcon(QStyle::SP_DialogSaveButton);
-      }
-
-      send_button_->setIcon(icon);
-      send_button_->setToolTip(trs("Update summarization from the conversation"));
-    } else {
-      // The send arrow takes the accent colour; a busy composer mutes it through
-      // the icon's disabled pixmap.
-      QIcon icon = resource_icon(QStringLiteral("send"), colors.accent, colors.text_muted);
-
-      if (icon.isNull()) {
-        icon = style()->standardIcon(QStyle::SP_ArrowUp);
-      }
-
-      send_button_->setIcon(icon);
-      send_button_->setToolTip(trs("Send"));
+    if (icon.isNull()) {
+      icon = style()->standardIcon(QStyle::SP_ArrowUp);
     }
+
+    send_button_->setIcon(icon);
+    send_button_->setToolTip(trs("Send"));
   }
 
   if (expand_button_ != nullptr) {
@@ -815,7 +686,6 @@ void ConversationView::apply_composer_icons() {
   }
 
   if (cancel_button_ != nullptr) {
-    // The stop square shares the muted colour of the other chrome actions.
     QIcon icon = resource_icon(QStringLiteral("stop"), colors.text_muted, colors.text_muted);
 
     if (icon.isNull()) {
@@ -841,71 +711,8 @@ void ConversationView::toggle_composer_height() {
   apply_composer_height();
 }
 
-bool ConversationView::summarize_due() const {
-  const lnb::core::Session session = controller_.session();
-
-  if (session.id_ == 0) {
-    return false;
-  }
-
-  // The decision belongs to the manager, not the widget: the session's own
-  // overflow first, then the shared assistant trigger (or an assistant fold
-  // already in flight). Every composer therefore reports the same action, and the
-  // send button is banned the moment either trigger is met.
-  const auto trigger = api_.has_session_summary_trigger_met(session_id_);
-  return !trigger.has_value();
-}
-
-void ConversationView::refresh_send_mode() {
-  // The shared assistant fold can start or finish between poll ticks, so the
-  // enabled state is refreshed here too, not only in poll().
-  set_busy(controller_.busy());
-  update_send_mode();
-}
-
-void ConversationView::update_send_mode() {
-  const bool due = summarize_due();
-
-  if (due == summarize_mode_) {
-    return;
-  }
-
-  summarize_mode_ = due;
-  apply_composer_icons();
-}
-
-void ConversationView::summarize_session_now(lnb::core::SummaryApprover approver) {
-  if (controller_.busy() || api_.assistant_busy()) {
-    return;
-  }
-
-  // A manual fold is a fresh pass, so land at the bottom like the composer's
-  // summarize action. The manager bans the composer's send/summarize button (and
-  // the stop action replaces it) for the whole pass, so the fold cannot be
-  // re-triggered while it runs.
-  transcript_->scroll_to_bottom();
-  controller_.summarize_session_now(std::move(approver));
-  set_busy(controller_.busy());
-}
-
 void ConversationView::submit() {
-  if (controller_.busy() || api_.assistant_busy()) {
-    return;
-  }
-
-  // Re-derive the primary action first, so a trigger that flipped since the last
-  // refresh cannot make the composer send into a fold the manager has already
-  // called for.
-  update_send_mode();
-
-  if (summarize_mode_) {
-    // The send button has become a summarize button: fold the overflow into
-    // the summary, sending nothing. A fresh pass lands at the bottom.
-    transcript_->scroll_to_bottom();
-    const lnb::core::SummaryApprover approver =
-        [](const lnb::core::SummaryPlan& plan) { return review_summary(plan); };
-    controller_.summarize(approver);
-    set_busy(controller_.busy());
+  if (controller_.busy()) {
     return;
   }
 
@@ -915,20 +722,9 @@ void ConversationView::submit() {
     return;
   }
 
-  // A freshly submitted message is content the writer wants to see, so jump back
-  // to the bottom even if they had scrolled away; the reload triggered by send()
-  // then follows the reply. The field is only cleared once the manager accepted
-  // the turn, so a refused send never loses the text. set_busy reflects whether a
-  // task actually started, so a refused one never wedges the composer.
   transcript_->scroll_to_bottom();
 
-  // The new message may itself push the transcript past the trigger, in which
-  // case the turn folds the overflow before replying. That request must be
-  // reviewed like every other summarization request.
-  const lnb::core::SummaryApprover approver =
-      [](const lnb::core::SummaryPlan& plan) { return review_summary(plan); };
-
-  if (controller_.send(text.toStdString(), approver)) {
+  if (controller_.send(text.toStdString())) {
     input_->clear();
   }
 

@@ -1,7 +1,7 @@
 #include "ui/theme.hpp"
 
 #include "settings/settings.hpp"
-#include "shark/log.hpp"
+#include "felis/log.hpp"
 
 #include <QApplication>
 #include <QDir>
@@ -171,6 +171,10 @@ Theme parse_theme(const std::optional<QJsonObject>& root, const std::string& nam
   Theme theme;
 
   if (!root.has_value()) {
+    // No theme.json beside the binary and no compiled-in resource: fall back to
+    // the built-in Catppuccin defaults rather than an all-invalid (black) palette.
+    theme.colors = parse_colors(QJsonObject{});
+    theme.metrics = parse_metrics(QJsonObject{});
     return theme;
   }
 
@@ -219,7 +223,7 @@ void load_background(const lnb::Settings& settings) {
   const QPixmap pixmap(path);
 
   if (pixmap.isNull()) {
-    shark::log::error("background image could not be loaded: {}", path.toStdString());
+    felis::log::error("background image could not be loaded: {}", path.toStdString());
     return;
   }
 
@@ -353,7 +357,7 @@ void apply_theme(QApplication& app, const lnb::Settings& settings) {
     // parse_theme() keeps its default-constructed colours when there is no
     // definition, which render as black; make that failure visible rather than
     // silently shipping a black window.
-    shark::log::error(
+    felis::log::error(
         "no theme.json found in the working directory, next to the executable, "
         "or in the compiled resources; the UI will render without themed colours"
     );
@@ -430,7 +434,7 @@ void apply_theme(QApplication& app, const lnb::Settings& settings) {
   load_background(settings);
   current.tint = resolve_override(settings);
 
-  shark::log::debug("theme '{}' applied", current.theme.name.toStdString());
+  felis::log::debug("theme '{}' applied", current.theme.name.toStdString());
 }
 
 const Theme& theme() {

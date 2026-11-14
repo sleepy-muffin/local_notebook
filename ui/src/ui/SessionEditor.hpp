@@ -4,165 +4,58 @@
 
 #include <cstdint>
 
-#include "local_notebook/core/model.hpp"
-
-class QComboBox;
 class QCheckBox;
+class QComboBox;
 class QLineEdit;
-class QListWidget;
 class QPlainTextEdit;
 class QPushButton;
 class QSpinBox;
-class QStackedWidget;
 class QWidget;
 
-namespace lnb::core {
-class interface;
+namespace felis::bell {
+class client;
 }
 
 namespace ui {
 class PlainTextEdit;
 
-class ConversationView;
-
-// Edits one session: its title, custom instructions, shared directories, summary
-// and every session-bound budget (design-1.md §8). Like the settings window, the
-// dialog is a left-hand navigation rail over three stacked pages — General,
-// Summarization and Tools — and the summary box is directly editable, with an
-// "Update summarization now" action that rebuilds it on demand.
-//
-// Pass a session_id of 0 to create a new session; the accepted id is exposed by
-// session_id().
+// Edits one session: its title, custom instructions, shared directories, tool
+// permissions and every session-bound budget. Pass a session_id of 0 to create a
+// new session; the accepted id is exposed by session_id().
 class SessionEditor : public QDialog {
 public:
   SessionEditor(
-      lnb::core::interface& api, std::uint32_t session_id,
-      QWidget* parent = nullptr
+      felis::bell::client& api, std::uint32_t session_id, QWidget* parent = nullptr
   );
 
   [[nodiscard]] std::uint32_t session_id() const { return session_id_; }
 
-  // The conversation view that owns the session's background worker, when one is
-  // available. A manual summarization update then runs as the session's own task,
-  // so it appears in the tasks window and can never race a generation on the same
-  // session. Unset for a brand-new session, whose update action is disabled
-  // because there is nothing stored to summarize.
-  void set_conversation_view(ConversationView* view) { conversation_view_ = view; }
-
 private:
-  // The navigation rail and the stacked pages it selects, built like the
-  // settings window's body.
-  QWidget* build_body();
-  QWidget* build_general_tab();
-  QWidget* build_summary_tab();
-  QWidget* build_tools_tab();
-
-  // Puts one page's content inside a scroll area, matching the window's own
-  // scrollbar and margins.
-  QWidget* scrolled_tab(QWidget* content);
-
-  // The dialog chrome plus the navigation rail's row states.
-  QString session_stylesheet() const;
-
   void load_session();
   void save_session();
 
-  // Rebuilds `combo`'s reasoning list for the assistant's current model, keeping
-  // `preferred` visible even when the model no longer offers it.
-  void populate_reasoning(QComboBox* combo, const std::string& preferred);
-
-  // Merges the whole transcript into the summary box on demand, regardless of
-  // the automatic trigger. Runs as the session's own background task (through the
-  // conversation view) and reloads the persisted summary when it finishes.
-  void summarize_now();
-
-  // Rebuilds the version list from the database (newest version first) and shows
-  // its active version. Called after loading and after a version is removed.
-  void reload_summary_versions();
-
-  // Shows one version in the summary box and watermark field. A negative row
-  // (nothing selected / no versions) leaves the box editable so a new summary can
-  // be written. An older, non-active version is shown read-only so that saving
-  // cannot silently revoke a newer one.
-  void show_summary_version(int row);
-
-  // Deletes one summary version and re-projects the session's active summary.
-  void remove_summary_version(std::uint32_t summary_id);
-
-  lnb::core::interface& api_;
+  felis::bell::client& api_;
 
   // 0 while creating; the stored id once the session exists.
   std::uint32_t session_id_ = 0;
-  lnb::core::Session session_;
 
   QLineEdit* title_ = nullptr;
   QPlainTextEdit* instructions_ = nullptr;
-
-  // One directory per line; the order sets the mount name when directories
-  // share a basename (the second becomes e.g. "project-2").
   PlainTextEdit* shared_directories_ = nullptr;
 
-  // Tool permissions for this session. The master switch gates all of them; the
-  // three category switches keep their values while it is off.
-  QCheckBox* tools_enabled_ = nullptr;
+  QCheckBox* online_tools_ = nullptr;
   QCheckBox* read_tools_ = nullptr;
   QCheckBox* write_tools_ = nullptr;
-  QCheckBox* online_tools_ = nullptr;
+  QCheckBox* bash_tools_ = nullptr;
 
-  // The reasoning level this session asks for. The list is model-specific; a
-  // stale level stays selectable so it can be corrected rather than dropped.
   QComboBox* reasoning_ = nullptr;
-
-  // The reasoning level this session's summariser runs at, independent of the
-  // chat level above.
   QComboBox* summary_reasoning_ = nullptr;
 
-  PlainTextEdit* summary_ = nullptr;
-  QSpinBox* watermark_ = nullptr;
-  QSpinBox* assistant_watermark_ = nullptr;
-
-  // The stored summary versions, newest first. Selecting one shows its content
-  // and watermark; only the active (newest) version is editable.
-  QListWidget* summary_versions_ = nullptr;
-
-  // The version currently displayed in the summary box. Only an active version
-  // is editable, so a Save cannot silently revoke a newer version while an older
-  // one is merely being inspected.
-  std::uint32_t shown_summary_id_ = 0;
-  std::string shown_summary_content_;
-  std::uint32_t shown_summary_watermark_ = 0;
-  bool shown_summary_active_ = true;
-
-  // When unchecked, this session is left out of the shared assistant memory.
-  QCheckBox* include_in_assistant_memory_ = nullptr;
-
-  QPushButton* summarize_button_ = nullptr;
-  QPushButton* save_button_ = nullptr;
-  QPushButton* cancel_button_ = nullptr;
-
-  // Fill the fields of their own page with a preset; neither saves by itself.
-  QComboBox* summary_preset_ = nullptr;
   QComboBox* budget_preset_ = nullptr;
-  QComboBox* tools_preset_ = nullptr;
-
-  // Session-bound summarization-update settings and budgets.
-  QSpinBox* summary_keep_ = nullptr;
-  QSpinBox* summary_trigger_ = nullptr;
-  QSpinBox* summary_budget_ = nullptr;
-  QSpinBox* midturn_input_budget_ = nullptr;
+  QSpinBox* threshold_ = nullptr;
+  QSpinBox* preserve_ = nullptr;
+  QSpinBox* compact_budget_ = nullptr;
   QSpinBox* response_budget_ = nullptr;
-
-  // The page rail and the pages it selects.
-  QListWidget* nav_ = nullptr;
-  QStackedWidget* stack_ = nullptr;
-
-  // The session's worker owner, when the editor was given one. Null for a new
-  // session.
-  ConversationView* conversation_view_ = nullptr;
-
-  // True while a manual summarization update is running, so the action cannot be
-  // started twice.
-  bool summarizing_ = false;
 };
 
 } // namespace ui

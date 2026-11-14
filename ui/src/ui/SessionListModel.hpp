@@ -6,13 +6,13 @@
 #include <string>
 #include <vector>
 
-#include "local_notebook/core/model.hpp"
+#include "application.hpp"
 
 namespace ui {
 
 // The sidebar session list. It holds a snapshot of the sessions ordered by the
-// time of their newest message (the order `store::database::sessions_by_recent`
-// returns); the window reloads it after every change.
+// time of their newest message (the order `client::sessions` returns); the window
+// reloads it after every change.
 class SessionListModel : public QAbstractListModel {
 public:
   // Custom roles so the delegate can read the whole session row.
@@ -39,17 +39,20 @@ public:
   // ISO-8601 time of each session's newest message, or an empty string when it
   // has none.
   void set_sessions(
-      std::vector<lnb::core::Session> sessions, std::vector<std::string> last_times
+      std::vector<felis::bell::shadowed_session> sessions,
+      std::vector<std::string> last_times
   );
 
-  [[nodiscard]] lnb::core::Session session_at(int row) const;
+  // The stored row, or nullptr when `row` is out of range. `shadowed_session`
+  // has no default constructor, so callers must handle the null case.
+  [[nodiscard]] const felis::bell::shadowed_session* session_at(int row) const;
   [[nodiscard]] std::uint32_t session_id_at(int row) const;
   [[nodiscard]] const std::string& last_time_at(int row) const;
   [[nodiscard]] bool pinned_at(int row) const;
   [[nodiscard]] int row_for(std::uint32_t session_id) const;
 
 private:
-  std::vector<lnb::core::Session> sessions_;
+  std::vector<felis::bell::shadowed_session> sessions_;
   std::vector<std::string> last_times_;  // parallel to sessions_
 };
 

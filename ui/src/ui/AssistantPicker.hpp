@@ -12,42 +12,34 @@ namespace lnb {
 struct Settings;
 }
 
-namespace lnb::core {
-class interface;
+namespace felis::bell {
+class store;
 }
 
 namespace ui {
 
 // The startup assistant picker: choose an existing assistant, or create a new
-// one, before the main window opens.
-//
-// Only each assistant's name and model are shown here. The API URL and the
-// authentication token are deliberately never displayed in this window — they
-// are edited solely inside the (separate) assistant form.
+// one, before the main window opens. It works against the assistant store only,
+// because the client (which owns one assistant for the process) is constructed
+// after the picker accepts.
 class AssistantPicker : public QDialog {
 public:
   explicit AssistantPicker(
-      lnb::core::interface& api, lnb::Settings& settings, QWidget* parent = nullptr
+      felis::bell::store& store, lnb::Settings& settings, QWidget* parent = nullptr
   );
 
 private:
-  // Rebuilds the list from disk and selects the last-opened assistant.
   void refresh();
-  // Enables the row actions for the current selection.
   void update_actions();
-  // Opens the selected assistant into the application and accepts the dialog.
   void open_selected();
-  // Edits the selected assistant in place, reusing its UUID.
   void edit_selected();
-  // Deletes the selected assistant after the user confirms.
   void delete_selected();
-  // Creates a fresh assistant under a new UUID.
   void create_new();
 
   [[nodiscard]] QString selected_uuid() const;
   void select_uuid(const QString& uuid);
 
-  lnb::core::interface& api_;
+  felis::bell::store& store_;
   lnb::Settings& settings_;
 
   QListWidget* list_ = nullptr;

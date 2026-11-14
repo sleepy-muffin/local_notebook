@@ -1,456 +1,154 @@
 #include "ui/AssistantPicker.hpp"
 
-#include <QAbstractItemView>
-#include <QAction>
 #include <QCheckBox>
-#include <QFont>
-#include <QFontMetrics>
-#include <QFormLayout>
-#include <QFrame>
+#include <QDialogButtonBox>
 #include <QHBoxLayout>
 #include <QLabel>
-#include <QLineEdit>
 #include <QListWidget>
 #include <QListWidgetItem>
-#include <QMenu>
 #include <QMessageBox>
-#include <QPainter>
-#include <QPlainTextEdit>
 #include <QPushButton>
 #include <QScrollArea>
-#include <QSizePolicy>
-#include <QSpinBox>
-#include <QStyle>
-#include <QStyleOptionViewItem>
-#include <QStyledItemDelegate>
+#include <QUuid>
 #include <QVBoxLayout>
-#include <QWidget>
 
-#include <algorithm>
 #include <string>
+#include <vector>
 
-#include "local_notebook/core/interface.hpp"
-#include "local_notebook/core/model.hpp"
-#include "shark/log.hpp"
-#include "shark/str.hpp"
-#include "settings/settings.hpp"
+#include "store.hpp"
 #include "support/i18n.hpp"
+#include "settings/settings.hpp"
 #include "ui/AssistantForm.hpp"
-#include "ui/BackgroundWidget.hpp"
-#include "ui/ScrollBar.hpp"
-#include "ui/theme.hpp"
+#include "ui/dialog_style.hpp"
 
 namespace ui {
+
+using namespace dialog_style;
+
 namespace {
 
-// Item roles carried by each assistant row.
-constexpr int k_uuid_role = Qt::UserRole;
-constexpr int k_model_role = Qt::UserRole + 1;
+constexpr int k_uuid_role = Qt::UserRole + 1;
 
-QString to_qstring(const std::string& value) {
-  return QString::fromUtf8(value.data(), static_cast<qsizetype>(value.size()));
-}
-
-QString colour_hex(const QColor& colour) {
-  return colour.name(QColor::HexRgb);
-}
-
-// The Zed-like chrome shared by both dialogs. It is scoped by object name so it
-// never leaks into the rest of the application.
-QString dialog_stylesheet(const QString& object_name) {
-  const ThemeColors& c = theme().colors;
-
-  const QString window = colour_hex(c.window);
-  const QString surface = colour_hex(c.surface);
-  const QString base = colour_hex(c.base);
-  const QString text = colour_hex(c.text);
-  const QString muted = colour_hex(c.text_muted);
-  const QString border = colour_hex(c.border);
-  const QString accent = colour_hex(c.accent);
-  const QString accent_hover = colour_hex(c.accent_hover);
-  const QString accent_active = colour_hex(c.accent_active);
-  const QString accent_text = colour_hex(c.accent_text);
-
-  QString sheet;
-
-  sheet += QStringLiteral("QDialog#%1 { background: %2; }").arg(object_name, window);
-  sheet += QStringLiteral("QLabel { background: transparent; }");
-  sheet += QStringLiteral("QLabel#PickerTitle, QLabel#FormTitle, QLabel#PreviewName { color: %1; }")
-               .arg(text);
-  sheet += QStringLiteral(
-               "QLabel#PickerSubtitle, QLabel#PreviewModel, QLabel#PreviewHint,"
-               " QLabel#FieldLabel, QLabel#SectionLabel { color: %1; }")
-               .arg(muted);
-
-  sheet += QStringLiteral("QWidget#Separator { background: %1; }").arg(border);
-
-  sheet += QStringLiteral(
-               "QListWidget#AssistantList { border: none; outline: none; }");
-  sheet += QStringLiteral(
-               "QScrollArea { border: none; }"
-               "QScrollArea > QWidget > QWidget { background: transparent; }");
-
-  sheet += QStringLiteral(
-               "QLineEdit, QPlainTextEdit, QSpinBox {"
-               "  background: %1; border: 1px solid %2; border-radius: 6px;"
-               "  padding: 5px 8px; selection-background-color: %3; selection-color: %4; }")
-               .arg(base, border, accent, accent_text);
-  sheet += QStringLiteral(
-               "QLineEdit:focus, QPlainTextEdit:focus, QSpinBox:focus {"
-               "  border: 1px solid %1; }")
-               .arg(accent);
-
-  sheet += QStringLiteral(
-               "QPushButton#Primary { background: %1; color: %2; border: none;"
-               "  border-radius: 6px; padding: 6px 18px; }")
-               .arg(accent, accent_text);
-  sheet += QStringLiteral("QPushButton#Primary:hover { background: %1; }").arg(accent_hover);
-  sheet += QStringLiteral("QPushButton#Primary:pressed { background: %1; }").arg(accent_active);
-  sheet += QStringLiteral("QPushButton#Primary:disabled { background: %1; color: %2; }")
-               .arg(surface, muted);
-
-  sheet += QStringLiteral(
-               "QPushButton#Secondary { background: transparent; color: %1;"
-               "  border: 1px solid %2; border-radius: 6px; padding: 6px 14px; }")
-               .arg(text, border);
-  sheet += QStringLiteral("QPushButton#Secondary:hover { background: %1; }").arg(surface);
-  sheet += QStringLiteral("QPushButton#Secondary:disabled { color: %1; }").arg(muted);
-
-  return sheet;
-}
-
-QFont scaled_font(double delta, bool bold) {
-  QFont font = ui_font();
-  if (font.pointSizeF() > 1.0) {
-    font.setPointSizeF(font.pointSizeF() + delta);
-  }
-  if (bold) {
-    font.setWeight(QFont::DemiBold);
-  }
-  return font;
-}
-
-// A hairline drawn as a styled QWidget, so it is exactly one pixel and uses the
-// theme's border colour.
-QWidget* h_separator(QWidget* parent) {
-  auto* line = new QWidget(parent);
-  line->setObjectName(QStringLiteral("Separator"));
-  line->setAttribute(Qt::WA_StyledBackground, true);
-  line->setFixedHeight(1);
-  line->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-  return line;
-}
-
-// Paints one assistant row: the name in the foreground colour and the model,
-// muted, beneath it. Hover and selection use the shared low-contrast row states
-// so this list reads exactly like the main window's session list.
-class AssistantItemDelegate : public QStyledItemDelegate {
-public:
-  explicit AssistantItemDelegate(QObject* parent = nullptr)
-      : QStyledItemDelegate(parent) {}
-
-  void paint(
-      QPainter* painter,
-      const QStyleOptionViewItem& option,
-      const QModelIndex& index
-  ) const override {
-    painter->save();
-
-    const ThemeColors& colours = theme().colors;
-    const bool selected = option.state & QStyle::State_Selected;
-    const bool hovered = option.state & QStyle::State_MouseOver;
-
-    const QRect item = option.rect.adjusted(4, 3, -4, -3);
-
-    QColor background = Qt::transparent;
-    if (selected) {
-      background = row_selected_background();
-    } else if (hovered) {
-      background = row_hover_background();
-    }
-
-    if (background.alpha() > 0) {
-      painter->setPen(Qt::NoPen);
-      painter->setBrush(background);
-      painter->drawRoundedRect(item, 8, 8);
-    }
-
-    const QString name = index.data(Qt::DisplayRole).toString();
-    const QString model = index.data(k_model_role).toString();
-
-    const QRect content = item.adjusted(12, 6, -12, -6);
-
-    const QFont name_font = scaled_font(0.0, true);
-    const QFontMetrics name_metrics(name_font);
-    const int name_height = name_metrics.height();
-
-    painter->setFont(name_font);
-    painter->setPen(colours.text);
-    const QRect name_rect(content.left(), content.top(), content.width(), name_height);
-    painter->drawText(
-        name_rect,
-        Qt::AlignLeft | Qt::AlignVCenter,
-        name_metrics.elidedText(name, Qt::ElideRight, name_rect.width())
-    );
-
-    if (!model.isEmpty()) {
-      const QFont model_font = scaled_font(-1.0, false);
-      const QFontMetrics model_metrics(model_font);
-      const QRect model_rect(
-          content.left(),
-          name_rect.bottom() + 1,
-          content.width(),
-          content.bottom() - name_rect.bottom()
-      );
-      painter->setFont(model_font);
-      painter->setPen(colours.text_muted);
-      painter->drawText(
-          model_rect,
-          Qt::AlignLeft | Qt::AlignVCenter,
-          model_metrics.elidedText(model, Qt::ElideRight, model_rect.width())
-      );
-    }
-
-    painter->restore();
-  }
-
-  QSize sizeHint(
-      const QStyleOptionViewItem& option,
-      const QModelIndex& index
-  ) const override {
-    QSize size = QStyledItemDelegate::sizeHint(option, index);
-    size.setHeight(std::max(metrics().session_item_height + 12, 48));
-    size.setWidth(std::max(size.width(), 220));
-    return size;
-  }
-};
-
-// The shared editor for creating and editing an assistant. It returns a fully
-// populated lnb::core::Assistant; the caller decides which UUID to persist it under.
+// A small dialog wrapping AssistantForm, used by both "create" and "edit".
+// Validates the base URL before accepting so a broken endpoint is never saved.
 class AssistantFormDialog : public QDialog {
 public:
-  AssistantFormDialog(
-      const QString& title,
-      const lnb::core::Assistant& initial,
-      QWidget* parent = nullptr
-  )
+  AssistantFormDialog(const felis::bell::assistant& initial, QWidget* parent)
       : QDialog(parent), initial_(initial) {
-    setObjectName(QStringLiteral("AssistantForm"));
-    setWindowTitle(title);
-    setModal(true);
-    resize(600, 660);
-    setMinimumSize(600, 520);
-    setFont(ui_font());
+    setObjectName(QStringLiteral("AssistantFormDialog"));
+    setWindowTitle(trs("Assistant"));
+    resize(520, 640);
 
     auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(0, 0, 0, 0);
-    root->setSpacing(0);
+    root->setContentsMargins(20, 20, 20, 16);
+    root->setSpacing(12);
 
-    auto* background = new BackgroundWidget(this);
-    root->addWidget(background);
-
-    auto* outer = new QVBoxLayout(background);
-    outer->setContentsMargins(24, 20, 24, 16);
-    outer->setSpacing(0);
-
-    auto* heading = new QLabel(title, background);
-    heading->setObjectName(QStringLiteral("FormTitle"));
-    heading->setFont(scaled_font(4.0, true));
-    outer->addWidget(heading);
-    outer->addSpacing(16);
-
-    auto* scroll = new QScrollArea(background);
+    auto* scroll = new QScrollArea(this);
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
-    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    install_scroll_bars(scroll, ScrollBarTrack::Window);
-
     form_ = new AssistantForm(scroll);
-    form_->set_assistant(initial_);
     scroll->setWidget(form_);
+    root->addWidget(scroll, 1);
 
-    outer->addWidget(scroll, 1);
-    outer->addSpacing(12);
-    outer->addWidget(h_separator(background));
-    outer->addSpacing(12);
+    auto* buttons =
+        new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, this);
+    buttons->button(QDialogButtonBox::Save)->setObjectName(QStringLiteral("Primary"));
+    buttons->button(QDialogButtonBox::Cancel)->setObjectName(QStringLiteral("Secondary"));
+    connect(buttons, &QDialogButtonBox::accepted, this, [this]() { accept(); });
+    connect(buttons, &QDialogButtonBox::rejected, this, [this]() { reject(); });
+    root->addWidget(buttons);
 
-    auto* footer = new QHBoxLayout();
-    footer->setSpacing(8);
-    footer->addStretch(1);
-
-    auto* cancel = new QPushButton(trs("Cancel"), background);
-    cancel->setObjectName(QStringLiteral("Secondary"));
-
-    auto* save = new QPushButton(trs("Save"), background);
-    save->setObjectName(QStringLiteral("Primary"));
-    save->setDefault(true);
-
-    footer->addWidget(cancel);
-    footer->addWidget(save);
-    outer->addLayout(footer);
-
-    setStyleSheet(dialog_stylesheet(QStringLiteral("AssistantForm")));
-
-    connect(cancel, &QPushButton::clicked, this, [this]() { reject(); });
-    connect(save, &QPushButton::clicked, this, [this]() { accept(); });
+    setStyleSheet(dialog_stylesheet(QStringLiteral("AssistantFormDialog")));
+    form_->set_assistant(initial_);
   }
 
-  // The edited assistant. Valid once exec() returned QDialog::Accepted.
-  [[nodiscard]] lnb::core::Assistant assistant() const { return result_; }
-
   void accept() override {
-    // An unusable endpoint is refused here, before anything is written: the base
-    // must be an http(s) URL ending in /v1.
     QString error;
     if (!form_->validate_base_url(error)) {
-      QMessageBox::warning(this, trs("Invalid API URL"), error);
+      form_->setToolTip(error);
       return;
     }
-
-    // Start from the original so every field the form does not own — memory_, in
-    // particular — is carried through untouched.
-    lnb::core::Assistant value = initial_;
-    form_->write_into(value);
-    result_ = value;
+    result_ = initial_;
+    form_->write_into(result_);
     QDialog::accept();
   }
 
+  [[nodiscard]] const felis::bell::assistant& result() const { return result_; }
+
 private:
-  lnb::core::Assistant initial_;
-  lnb::core::Assistant result_;
+  felis::bell::assistant initial_;
+  felis::bell::assistant result_;
   AssistantForm* form_ = nullptr;
 };
+
+QString new_uuid() {
+  return QUuid::createUuid().toString(QUuid::WithoutBraces);
+}
 
 } // namespace
 
 AssistantPicker::AssistantPicker(
-    lnb::core::interface& api, lnb::Settings& settings, QWidget* parent
+    felis::bell::store& store, lnb::Settings& settings, QWidget* parent
 )
-    : QDialog(parent), api_(api), settings_(settings) {
+    : QDialog(parent), store_(store), settings_(settings) {
   setObjectName(QStringLiteral("AssistantPicker"));
-  setWindowTitle(trs("Assistants"));
-  setModal(true);
-  resize(400, 520);
-  setMinimumSize(300, 420);
-  setFont(ui_font());
+  setWindowTitle(trs("Local Notebook"));
+  resize(520, 560);
 
   auto* root = new QVBoxLayout(this);
-  root->setContentsMargins(0, 0, 0, 0);
-  root->setSpacing(0);
+  root->setContentsMargins(24, 24, 24, 20);
+  root->setSpacing(14);
 
-  auto* background = new BackgroundWidget(this);
-  root->addWidget(background);
-
-  auto* outer = new QVBoxLayout(background);
-  outer->setContentsMargins(28, 24, 28, 20);
-  outer->setSpacing(0);
-
-  // ---- Header ----
-  auto* title = new QLabel(trs("Assistants"), background);
+  auto* title = new QLabel(trs("Choose an assistant"), this);
   title->setObjectName(QStringLiteral("PickerTitle"));
-  title->setFont(scaled_font(4.0, true));
+  apply_derived_font(title, 2.0, true);
+  root->addWidget(title);
 
-  auto* subtitle = new QLabel(
-      trs("Choose an assistant to open, or create a new one."),
-      background
-  );
+  auto* subtitle = new QLabel(trs("Each assistant is a separate notebook."), this);
   subtitle->setObjectName(QStringLiteral("PickerSubtitle"));
+  subtitle->setWordWrap(true);
+  root->addWidget(subtitle);
 
-  outer->addWidget(title);
-  outer->addWidget(subtitle);
-  outer->addSpacing(16);
-
-  // ---- Body: the assistant list, full width ----
-  list_ = new QListWidget(background);
+  list_ = new QListWidget(this);
   list_->setObjectName(QStringLiteral("AssistantList"));
-  // The list shows the dialog behind it; the rule lives on the list so a style
-  // that paints from the palette cannot fill the scrollbar column black.
-  show_parent_background(list_);
-  list_->setItemDelegate(new AssistantItemDelegate(list_));
-  list_->setSelectionMode(QAbstractItemView::SingleSelection);
-  list_->setEditTriggers(QAbstractItemView::NoEditTriggers);
-  list_->setFrameShape(QFrame::NoFrame);
-  list_->setUniformItemSizes(true);
-  list_->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
-  list_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-  install_scroll_bars(list_, ScrollBarTrack::Window);
-  list_->setSelectionRectVisible(false);
-  list_->setMouseTracking(true);
-  list_->viewport()->setMouseTracking(true);
-  list_->setContextMenuPolicy(Qt::CustomContextMenu);
+  list_->setSpacing(2);
+  root->addWidget(list_, 1);
 
-  outer->addWidget(list_, 1);
-  outer->addSpacing(16);
+  connect(list_, &QListWidget::itemSelectionChanged, this, [this]() { update_actions(); });
+  connect(list_, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem*) {
+    open_selected();
+  });
 
-  // ---- Footer ----
-  outer->addWidget(h_separator(background));
-  outer->addSpacing(12);
-
-  // The startup checkbox sits on its own line above the button row.
-  auto_login_ = new QCheckBox(trs("Open automatically at startup"), background);
-  auto_login_->setChecked(settings_.auto_login);
-  outer->addWidget(auto_login_);
-  outer->addSpacing(8);
+  auto_login_ = new QCheckBox(trs("Open this assistant automatically next time"), this);
+  root->addWidget(auto_login_);
 
   auto* footer = new QHBoxLayout();
   footer->setSpacing(8);
 
-  auto* new_button = new QPushButton(trs("New assistant"), background);
+  auto* new_button = new QPushButton(trs("New"), this);
   new_button->setObjectName(QStringLiteral("Secondary"));
+  connect(new_button, &QPushButton::clicked, this, [this]() { create_new(); });
 
-  edit_button_ = new QPushButton(trs("Edit"), background);
+  edit_button_ = new QPushButton(trs("Edit"), this);
   edit_button_->setObjectName(QStringLiteral("Secondary"));
+  connect(edit_button_, &QPushButton::clicked, this, [this]() { edit_selected(); });
 
-  open_button_ = new QPushButton(trs("Open"), background);
+  auto* delete_button = new QPushButton(trs("Delete"), this);
+  delete_button->setObjectName(QStringLiteral("Secondary"));
+  connect(delete_button, &QPushButton::clicked, this, [this]() { delete_selected(); });
+
+  open_button_ = new QPushButton(trs("Open"), this);
   open_button_->setObjectName(QStringLiteral("Primary"));
-  open_button_->setDefault(true);
-
-  auto* cancel_button = new QPushButton(trs("Cancel"), background);
-  cancel_button->setObjectName(QStringLiteral("Secondary"));
+  connect(open_button_, &QPushButton::clicked, this, [this]() { open_selected(); });
 
   footer->addWidget(new_button);
-  footer->addStretch(1);
   footer->addWidget(edit_button_);
+  footer->addWidget(delete_button);
+  footer->addStretch(1);
   footer->addWidget(open_button_);
-  footer->addWidget(cancel_button);
-
-  outer->addLayout(footer);
+  root->addLayout(footer);
 
   setStyleSheet(dialog_stylesheet(QStringLiteral("AssistantPicker")));
-
-  connect(list_, &QListWidget::currentRowChanged, this, [this](int) {
-    update_actions();
-  });
-  connect(list_, &QListWidget::itemActivated, this, [this](QListWidgetItem*) {
-    open_selected();
-  });
-  connect(list_, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem*) {
-    open_selected();
-  });
-  connect(
-      list_, &QListWidget::customContextMenuRequested, this,
-      [this](const QPoint& pos) {
-        QListWidgetItem* item = list_->itemAt(pos);
-        if (item == nullptr) {
-          return;
-        }
-
-        // The menu acts on the row under the cursor, so select it first.
-        list_->setCurrentItem(item);
-
-        QMenu menu(list_);
-        QAction* remove = menu.addAction(trs("Delete assistant"));
-        QAction* chosen = menu.exec(list_->viewport()->mapToGlobal(pos));
-
-        if (chosen == remove) {
-          delete_selected();
-        }
-      }
-  );
-  connect(new_button, &QPushButton::clicked, this, [this]() { create_new(); });
-  connect(edit_button_, &QPushButton::clicked, this, [this]() { edit_selected(); });
-  connect(open_button_, &QPushButton::clicked, this, [this]() { open_selected(); });
-  connect(cancel_button, &QPushButton::clicked, this, [this]() { reject(); });
 
   refresh();
 }
@@ -458,37 +156,37 @@ AssistantPicker::AssistantPicker(
 void AssistantPicker::refresh() {
   list_->clear();
 
-  const std::vector<std::pair<std::string, lnb::core::Assistant>> assistants = api_.list_assistants();
+  const std::vector<std::string> uuids = store_.scan_assistants();
 
-  for (const auto& assistant : assistants) {
-    const QString name = to_qstring(assistant.second.name_);
-    const QString model = to_qstring(assistant.second.model_);
+  for (const std::string& uuid: uuids) {
+    const felis::bell::assistant assistant = store_.load_assistant(uuid);
+
+    const QString name = assistant.name_.empty() ? trs("Untitled assistant")
+                                                 : to_qstring(assistant.name_);
+    const QString model = to_qstring(assistant.model_);
 
     auto* item = new QListWidgetItem(
-        name.isEmpty() ? trs("Untitled assistant") : name,
-        list_
-    );
-    item->setData(k_uuid_role, to_qstring(assistant.first));
-    item->setData(k_model_role, model);
-    item->setToolTip(name);
+        QStringLiteral("%1\n%2").arg(name, model), list_);
+    item->setData(k_uuid_role, to_qstring(uuid));
   }
 
-  shark::log::debug("assistant picker listed {} assistant(s)", assistants.size());
+  auto_login_->setChecked(settings_.auto_login);
 
-  if (list_->count() > 0) {
-    // Prefer the last-opened assistant when it is still present.
-    const QString last = to_qstring(settings_.last_assistant);
-    int target = 0;
-    if (!last.isEmpty()) {
-      for (int row = 0; row < list_->count(); ++row) {
-        if (list_->item(row)->data(k_uuid_role).toString() == last) {
-          target = row;
-          break;
-        }
-      }
+  const QString last = to_qstring(settings_.last_assistant);
+  int target = -1;
+  for (int row = 0; row < list_->count(); ++row) {
+    if (list_->item(row)->data(k_uuid_role).toString() == last) {
+      target = row;
+      break;
     }
+  }
+
+  if (target < 0 && list_->count() > 0) {
+    target = 0;
+  }
+
+  if (target >= 0) {
     list_->setCurrentRow(target);
-    list_->setFocus();
   }
 
   update_actions();
@@ -496,17 +194,13 @@ void AssistantPicker::refresh() {
 
 void AssistantPicker::update_actions() {
   const bool has_selection = !selected_uuid().isEmpty();
-
   edit_button_->setEnabled(has_selection);
   open_button_->setEnabled(has_selection);
 }
 
 QString AssistantPicker::selected_uuid() const {
   const QListWidgetItem* item = list_->currentItem();
-  if (item == nullptr) {
-    return {};
-  }
-  return item->data(k_uuid_role).toString();
+  return item != nullptr ? item->data(k_uuid_role).toString() : QString();
 }
 
 void AssistantPicker::select_uuid(const QString& uuid) {
@@ -520,137 +214,74 @@ void AssistantPicker::select_uuid(const QString& uuid) {
 
 void AssistantPicker::open_selected() {
   const QString uuid = selected_uuid();
+
   if (uuid.isEmpty()) {
     return;
   }
 
-  const std::string id = uuid.toStdString();
-  shark::log::info("opening assistant {}", id);
-
-  // Another running instance may already own this assistant. The core refuses,
-  // so keep the picker open and say why rather than silently doing nothing.
-  const auto opened = api_.open_assistant(id);
-  if (!opened) {
-    const QString reason = opened.error() == lnb::core::error_code::ERR_ASSISTANT_HAS_NOT_LOADED_YET
-        ? trs("This assistant is already open in another instance.")
-        : trs("The assistant could not be opened.");
-    QMessageBox::warning(this, trs("Unable to open assistant"), reason);
-    return;
-  }
-
+  settings_.last_assistant = uuid.toStdString();
   settings_.auto_login = auto_login_->isChecked();
-  settings_.last_assistant = id;
   accept();
 }
 
 void AssistantPicker::create_new() {
-  AssistantFormDialog form(trs("New assistant"), lnb::core::Assistant{}, this);
+  felis::bell::assistant initial;
+  initial.model_ = "deepseek-flash";
+
+  AssistantFormDialog form(initial, this);
+
   if (form.exec() != QDialog::Accepted) {
     return;
   }
 
-  const lnb::core::Assistant assistant = form.assistant();
-  const std::string uuid = shark::str::make_uuid();
-
-  api_.get_store().save_assistant(uuid, assistant);
-  shark::log::info("created assistant {}", uuid);
-
-  // The list is rebuilt from disk, so the new assistant only appears here
-  // after a refresh. Select it so the row actions act on it right away.
+  const QString uuid = new_uuid();
+  store_.save_assistant(uuid.toStdString(), form.result());
+  settings_.last_assistant = uuid.toStdString();
   refresh();
-  select_uuid(to_qstring(uuid));
-  update_actions();
-
-  /*
-   * Do not open the just created one automatically.
-   */
-
-  //   if (!api_.open_assistant(uuid)) {
-  //     QMessageBox::warning(
-  //         this, trs("Assistant in use"), to_qstring(api_.last_error())
-  //     );
-  //     refresh();
-  //     select_uuid(to_qstring(uuid));
-  //     update_actions();
-  //     return;
-  //   }
-  //
-  //   settings_.auto_login = auto_login_->isChecked();
-  //   settings_.last_assistant = uuid;
-  //   accept();
+  select_uuid(uuid);
 }
 
 void AssistantPicker::edit_selected() {
   const QString uuid = selected_uuid();
+
   if (uuid.isEmpty()) {
     return;
   }
 
-  const std::string id = uuid.toStdString();
-  const lnb::core::Assistant existing = api_.get_store().load_assistant(id);
+  const felis::bell::assistant existing = store_.load_assistant(uuid.toStdString());
+  AssistantFormDialog form(existing, this);
 
-  AssistantFormDialog form(trs("Edit assistant"), existing, this);
   if (form.exec() != QDialog::Accepted) {
     return;
   }
 
-  const lnb::core::Assistant assistant = form.assistant();
-  api_.get_store().save_assistant(id, assistant);
-  shark::log::info("updated assistant {}", id);
-
-  // Keep the in-memory assistant in step when the edited one is the open one.
-  const auto open_uuid = api_.assistant_uuid();
-  if (open_uuid && *open_uuid == id) {
-    api_.set_assistant(assistant);
-    api_.save_assistant();
-  }
-
+  store_.save_assistant(uuid.toStdString(), form.result());
   refresh();
   select_uuid(uuid);
-  update_actions();
 }
 
 void AssistantPicker::delete_selected() {
   const QString uuid = selected_uuid();
+
   if (uuid.isEmpty()) {
     return;
   }
 
-  const std::string id = uuid.toStdString();
-  const lnb::core::Assistant existing = api_.get_store().load_assistant(id);
+  const felis::bell::assistant existing = store_.load_assistant(uuid.toStdString());
   const QString name =
       existing.name_.empty() ? trs("Untitled assistant") : to_qstring(existing.name_);
 
   const QMessageBox::StandardButton answer = QMessageBox::warning(
-      this, trs("Delete Assistant"),
-      trs("Delete \"%1\"? Its sessions, messages and settings will be removed "
-          "permanently. This cannot be undone.")
-          .arg(name),
-      QMessageBox::Yes | QMessageBox::No, QMessageBox::No
-  );
+      this, trs("Delete assistant"),
+      trs("Delete \"%1\" and its whole notebook? This cannot be undone.").arg(name),
+      QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
 
   if (answer != QMessageBox::Yes) {
     return;
   }
 
-  if (!api_.delete_assistant(id)) {
-    QMessageBox::warning(
-        this, trs("Unable to delete assistant"),
-        trs("The assistant could not be deleted. It may still be open in another "
-            "instance.")
-    );
-    return;
-  }
-
-  shark::log::info("deleted assistant {}", id);
-
-  // Do not reopen an assistant that no longer exists on the next launch.
-  if (settings_.last_assistant == id) {
-    settings_.last_assistant.clear();
-  }
-
+  store_.delete_assistant(uuid.toStdString());
   refresh();
-  update_actions();
 }
 
 } // namespace ui

@@ -34,28 +34,28 @@ set(LOCAL_NOTEBOOK_UI_SOURCES
         src/ui/SessionListModel.cpp
         src/ui/SettingsWindow.cpp
         src/ui/StatusNotice.cpp
-        src/ui/SummaryReviewDialog.cpp
-        src/ui/TasksWindow.cpp
         src/ui/TranscriptCanvas.cpp
         src/ui/theme.cpp
-
-        ${CMAKE_CURRENT_SOURCE_DIR}/../assets/local_notebook.qrc
 )
 
 # The Qt-facing half of the application: widgets, the settings layer and the
 # compiled-in resources. Everything it exports is reachable as
 # `local_notebook::ui`.
-local_notebook_add_module(ui STATIC
-        SOURCES
+add_library(ui STATIC
         ${LOCAL_NOTEBOOK_UI_SOURCES}
+)
 
-        PUBLIC_INCLUDES
-        ${CMAKE_CURRENT_SOURCE_DIR}/src
+add_library(local_notebook::ui ALIAS ui)
 
+target_include_directories(ui
         PUBLIC
-        local_notebook::core
-        local_notebook::render
-        shark::common
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_link_libraries(ui
+        PUBLIC
+        felis_bell
+        render
         Qt6::Core
         Qt6::Gui
         Qt6::Widgets
@@ -115,6 +115,11 @@ add_executable(local_notebook_app
         src/main.cpp
         src/wayland_icon.cpp
         ${LOCAL_NOTEBOOK_WAYLAND_ICON_SOURCES}
+        # The compiled-in resources (chrome icons, app icon, theme, licences).
+        # AUTORCC only processes .qrc files that are listed in a target's
+        # sources; without this the :/icons, :/appicon and :/licenses trees are
+        # never embedded and every resource_icon() call returns a null icon.
+        ${CMAKE_CURRENT_SOURCE_DIR}/../assets/local_notebook.qrc
 )
 add_executable(local_notebook::app ALIAS local_notebook_app)
 
@@ -134,38 +139,8 @@ set_target_properties(local_notebook_app PROPERTIES
 )
 
 # ========== ---------- ---------- ---------- ==========
-#                          TOOLS
-# ========== ---------- ---------- ---------- ==========
-
-# Development-only executable used to regenerate README screenshots.
-add_executable(local_notebook_screenshots
-        tools/screenshots.cpp
-)
-
-target_link_libraries(local_notebook_screenshots
-        PRIVATE
-        local_notebook::ui
-)
-
-# ========== ---------- ---------- ---------- ==========
 #                         CTESTS
 # ========== ---------- ---------- ---------- ==========
-
-# Regression tests for the UI-side send policy.
-# The controller is Qt-free: it is the send policy between the widgets and the
-# public core API, so it can be exercised without a display server.
-add_executable(
-        conversation-controller-test
-        tests/conversation_controller_test.cpp
-)
-
-target_link_libraries(
-        conversation-controller-test
-        PRIVATE
-        local_notebook::ui
-)
-
-add_test(NAME conversation-controller COMMAND conversation-controller-test)
 
 # Markdown conversion runs on the UI thread, but its data model is independent
 # of widgets and can be tested without a display server.

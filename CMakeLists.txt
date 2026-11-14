@@ -1,20 +1,20 @@
 cmake_minimum_required(VERSION 3.31)
-project(local_notebook LANGUAGES CXX)
+project(felis_notebook VERSION 0.1.0 LANGUAGES CXX)
 
-enable_testing()
+include(CTest)
 
-# No translation unit uses C++20 modules. CMake otherwise scans every source
-# with clang-scan-deps whenever the compiler supports it (clang does), and that
-# tool is packaged separately as clang-tools rather than with the compiler, so
-# builds with only clang installed fail. It also adds a scan step per file for
-# no benefit. Override the cache entry to enable scanning.
-set(CMAKE_CXX_SCAN_FOR_MODULES OFF CACHE BOOL
-    "Scan C++ sources for module dependencies")
-
-# One language standard and one compile-command database for every submodule.
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF CACHE BOOL
+    "Scan C++ sources for module dependencies")
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+set(FELIS_BUILD_NET ON CACHE BOOL "" FORCE)
+set(FELIS_BUILD_SQLITE3 ON CACHE BOOL "" FORCE)
+set(FELIS_BUILD_IMAGE OFF CACHE BOOL "" FORCE)
+set(FELIS_BUILD_AUDIO OFF CACHE BOOL "" FORCE)
+
 
 # ========== ---------- ---------- ---------- ==========
 #                   PLATFORM VARIABLES
@@ -62,61 +62,11 @@ if(MSVC)
     add_compile_options(/bigobj)
 endif()
 
-# Only the standard-library core, the Boost.JSON helpers and the SQLite wrapper
-# are used. Turning the image and audio modules off also stops CMake from
-# probing for OpenGL, JPEG, PNG and the audio codecs. The options are forced so
-# a cache left over from an earlier configure cannot resurrect those probes.
-set(SHARK_BUILD_IMAGE OFF CACHE BOOL "Build shark's image module" FORCE)
-set(SHARK_BUILD_AUDIO OFF CACHE BOOL "Build shark's audio module" FORCE)
 
 # ========== ---------- ---------- ---------- ==========
-#                     SUBMODULE HELPER
+#                    SUB  DIRECTORIES
 # ========== ---------- ---------- ---------- ==========
 
-
-# Each component lives in its own subdirectory and contributes exactly one
-# library, exposed under the `local_notebook::<name>` namespace. Consumers link
-# `local_notebook::core`, `local_notebook::ui`, `local_notebook::render`, ...
-# instead of hand-assembling target names out of `-core`/`-ui` suffixes, so the
-# submodules stay independent and can be reordered or reused freely.
-#
-#   local_notebook_add_module(<name> STATIC
-#       SOURCES          <files...>
-#       [PUBLIC_INCLUDES  <dirs...>]
-#       [PRIVATE_INCLUDES <dirs...>]
-#       [PUBLIC           <targets...>]
-#       [PRIVATE          <targets...>])
-function(local_notebook_add_module name type)
-    cmake_parse_arguments(ARG ""
-        ""
-        "SOURCES;PUBLIC_INCLUDES;PRIVATE_INCLUDES;PUBLIC;PRIVATE"
-        ${ARGN})
-
-    set(target "local_notebook_${name}")
-
-    add_library(${target} ${type} ${ARG_SOURCES})
-    add_library(local_notebook::${name} ALIAS ${target})
-
-    if(ARG_PUBLIC_INCLUDES)
-        target_include_directories(${target} PUBLIC ${ARG_PUBLIC_INCLUDES})
-    endif()
-    if(ARG_PRIVATE_INCLUDES)
-        target_include_directories(${target} PRIVATE ${ARG_PRIVATE_INCLUDES})
-    endif()
-
-    if(ARG_PUBLIC)
-        target_link_libraries(${target} PUBLIC ${ARG_PUBLIC})
-    endif()
-    if(ARG_PRIVATE)
-        target_link_libraries(${target} PRIVATE ${ARG_PRIVATE})
-    endif()
-
-    if(type STREQUAL "STATIC")
-        set_target_properties(${target} PROPERTIES
-            OUTPUT_NAME "local_notebook-${name}-${PLATFORM}-${ARCH}")
-    endif()
-endfunction()
-
-add_subdirectory(external/shark)
-add_subdirectory(core)
+add_subdirectory(external/felis)
+add_subdirectory(bell)
 add_subdirectory(ui)
