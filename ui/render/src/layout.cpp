@@ -296,6 +296,8 @@ Color Layout::role_text_color(Role role) const {
       return theme_.muted_text;
     case Role::Error:
       return theme_.danger_text;
+    case Role::Tool:
+      return theme_.tool_text;
   }
 
   return theme_.text;
@@ -429,7 +431,12 @@ void Layout::layout_block(std::size_t block_index, float x, float width, float y
     return;
   }
 
-  const Font base = block_font(block);
+  Font base = block_font(block);
+
+  if (role == Role::Tool && !block.full_scale) {
+    base.size *= theme_.tool_font_scale;
+  }
+
   const Color color = role_text_color(role);
   const float scale = role_line_height(role);
 
@@ -497,6 +504,10 @@ void Layout::layout_block(std::size_t block_index, float x, float width, float y
     geometry.gap_after = 0.0f;
   } else if (block.kind == BlockKind::ListItem) {
     geometry.gap_after = theme_.list_spacing;
+  } else if (role == Role::Tool && block.full_scale) {
+    // A strip's title sits tight above its own detail line, not a full
+    // paragraph gap away.
+    geometry.gap_after = 2.0f;
   } else {
     geometry.gap_after = theme_.paragraph_spacing;
   }
@@ -654,6 +665,9 @@ void Layout::paint(Canvas& canvas, const Rect& clip, const Selection& selection)
           break;
         case Role::Notice:
           background = theme_.notice_background;
+          break;
+        case Role::Tool:
+          background = theme_.tool_background;
           break;
         case Role::Assistant:
           break;

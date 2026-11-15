@@ -52,6 +52,12 @@ struct ThemeColors {
 
   QColor danger;
   QColor danger_text;
+
+  // The quiet strip shown in place of a tool call/result in the transcript: a
+  // subtle fill and a muted text colour. Kept as its own theme entries so a
+  // theme can tune how far the plumbing recedes.
+  QColor tool_background;
+  QColor tool_text;
 };
 
 struct Theme {

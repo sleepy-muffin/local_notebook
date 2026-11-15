@@ -49,6 +49,11 @@ struct LayoutTheme {
   Color border;
   Color selection;
 
+  // The quiet strip that stands in for a tool call/result in the transcript:
+  // a subtle fill and muted text, so plumbing reads without shouting.
+  Color tool_background;
+  Color tool_text;
+
   float bubble_radius = 8.0f;
   float code_radius = 6.0f;
 
@@ -56,6 +61,10 @@ struct LayoutTheme {
   // configured monospace size, so it keeps its proportions inside headings and
   // never looks oversized next to the prose.
   float inline_code_scale = 0.9f;
+
+  // Tool-call/result rows draw smaller than prose so they recede into the
+  // background as a one-line note rather than a full message.
+  float tool_font_scale = 0.88f;
 
   // Horizontal inset shared by every message body, so prose and code line up.
   float body_side_padding = 14.0f;

@@ -25,6 +25,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <iterator>
 #include <optional>
 #include <string>
 #include <vector>
@@ -56,6 +57,18 @@ QString from_utf8(const std::string& value) {
 std::u16string to_u16(const QString& value) {
   return std::u16string(
       reinterpret_cast<const char16_t*>(value.utf16()), static_cast<std::size_t>(value.size()));
+}
+
+// Collapses a tool payload (arguments JSON, tool output) onto a single short
+// line, so a tool strip stays a one-line note instead of a wall of text.
+QString compact_line(const QString& value, int limit) {
+  QString flat = value.simplified();
+
+  if (flat.size() > limit) {
+    flat = flat.left(limit - 1) + QChar(0x2026);
+  }
+
+  return flat;
 }
 
 // Streaming Markdown is re-rendered at most this often (ms), so a long reply is
@@ -266,6 +279,35 @@ ConversationView::ConversationView(
     }
   });
 
+  // Jump from an assistant reply back to the prompt it answers: walk the loaded
+  // history to the nearest preceding user turn, widen the window if that turn is
+  // older than what is on screen, then scroll it to the top.
+  transcript_->set_on_previous_prompt([this](std::uint32_t message_id) {
+    std::size_t index = messages_.size();
+    for (std::size_t i = 0; i < messages_.size(); ++i) {
+      if (messages_[i].id_ == message_id) {
+        index = i;
+        break;
+      }
+    }
+
+    while (index > 0) {
+      --index;
+      if (messages_[index].kind_ != felis::bell::message_kind::user_prompt) {
+        continue;
+      }
+
+      if (index < window_start_) {
+        const TranscriptCanvas::ScrollAnchor anchor = transcript_->anchor();
+        window_start_ = index;
+        rebuild_transcript(anchor, false);
+      }
+
+      transcript_->scroll_to_message(messages_[index].id_);
+      return;
+    }
+  });
+
   layout->addWidget(transcript_, 1);
 
   auto* composer = new QWidget(this);
@@ -462,14 +504,20 @@ void ConversationView::append_rendered_message(
     render::Document& document, const felis::bell::shadowed_message& message) const {
   using felis::bell::message_kind;
 
-  // Only the readable turns are rendered; the tool-call plumbing and the hidden
-  // reasoning are replayed to the model but never shown in the transcript.
-  bool from_self = false;
+  // The readable turns are full messages; tool calls and their results are
+  // folded into a compact strip so the plumbing is visible without crowding the
+  // transcript, and hidden reasoning is never shown at all. A strip carries a
+  // short bold title ("Tool call · name" / "Tool result · name") drawn at
+  // content size, so a call and its result read as clearly different things.
+  render::Role role = render::Role::Assistant;
   bool markdown = true;
+  bool editable = message.id_ != 0;
+  QString title;
+  QString text = from_utf8(message.content_);
 
   switch (message.kind_) {
     case message_kind::user_prompt:
-      from_self = true;
+      role = render::Role::User;
       markdown = false;
       break;
     case message_kind::assistant_output:
@@ -477,18 +525,56 @@ void ConversationView::append_rendered_message(
     case message_kind::inline_compact:
       markdown = false;
       break;
+    case message_kind::assistant_tool_call: {
+      role = render::Role::Tool;
+      markdown = false;
+      editable = false;
+      const QString name =
+          message.tool_call_.has_value() ? from_utf8(message.tool_call_->tool_name_) : QString();
+      title = name.isEmpty() ? trs("Tool call")
+                             : QStringLiteral("Tool call \u00b7 %1").arg(name);
+      text = compact_line(text, 160);
+      break;
+    }
+    case message_kind::tool_result: {
+      role = render::Role::Tool;
+      markdown = false;
+      editable = false;
+      const QString name =
+          message.tool_call_.has_value() ? from_utf8(message.tool_call_->tool_name_) : QString();
+      title = name.isEmpty() ? trs("Tool result")
+                             : QStringLiteral("Tool result \u00b7 %1").arg(name);
+      const QString output = compact_line(text, 200);
+      text = output.isEmpty() ? trs("(no output)") : output;
+      break;
+    }
     default:
       return;
   }
 
-  const render::Role role = from_self ? render::Role::User : render::Role::Assistant;
-  const QString raw = from_utf8(message.content_);
-
   render::MessageMeta meta = make_message_meta(
-      role, message.id_, std::u16string{}, std::u16string{}, message.id_ != 0, to_u16(raw));
+      role, message.id_, std::u16string{}, std::u16string{}, editable, to_u16(text));
 
-  auto blocks =
-      markdown ? make_markdown_blocks(message.content_) : make_plain_blocks(message.content_);
+  std::vector<render::Block> blocks;
+
+  if (!title.isEmpty()) {
+    // The strip's title row: bold, at normal content size, tight above the
+    // detail line that follows it.
+    render::Block heading;
+    heading.kind = render::BlockKind::Paragraph;
+    heading.full_scale = true;
+    heading.text = to_u16(title);
+    render::Span span;
+    span.length = static_cast<std::uint32_t>(heading.text.size());
+    span.bold = true;
+    heading.spans.push_back(span);
+    blocks.push_back(std::move(heading));
+  }
+
+  auto body = markdown ? make_markdown_blocks(text.toStdString())
+                       : make_plain_blocks(text.toStdString());
+  blocks.insert(blocks.end(), std::make_move_iterator(body.begin()),
+                std::make_move_iterator(body.end()));
 
   append_message(document, std::move(meta), std::move(blocks));
 }

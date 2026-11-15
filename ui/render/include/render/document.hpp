@@ -44,6 +44,10 @@ struct Block {
   std::uint32_t message = 0;
   bool first_in_message = false;
   bool last_in_message = false;
+  // Draw at the role's normal body size, ignoring a role's text shrink. The
+  // Tool role renders its detail text smaller to recede; a strip's title row
+  // opts out so it reads at the same size as ordinary content.
+  bool full_scale = false;
   std::u16string code_language;
   std::u16string text;
   std::vector<Span> spans;

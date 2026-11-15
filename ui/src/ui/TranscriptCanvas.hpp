@@ -60,6 +60,10 @@ public:
   // breaks; unrelated blocks are joined with a newline.
   [[nodiscard]] std::u16string selected_text() const;
 
+  // Scrolls so the message with `id` sits near the top of the viewport, used to
+  // jump back to the prompt a reply answers. No-op when the id is not laid out.
+  void scroll_to_message(std::uint32_t id);
+
   // Called when the reader reaches the top and older history may exist. The view
   // pages in a window and calls set_document again; without an anchor change the
   // canvas asks again, so a short transcript fills the viewport on its own.
@@ -69,6 +73,7 @@ public:
   void set_on_edit(std::function<void(std::uint32_t)> handler);
   void set_on_delete(std::function<void(std::uint32_t)> handler);
   void set_on_branch(std::function<void(std::uint32_t)> handler);
+  void set_on_previous_prompt(std::function<void(std::uint32_t)> handler);
 
 protected:
   void paintEvent(QPaintEvent* event) override;
@@ -86,6 +91,7 @@ private:
   std::function<void(std::uint32_t)> on_edit_;
   std::function<void(std::uint32_t)> on_delete_;
   std::function<void(std::uint32_t)> on_branch_;
+  std::function<void(std::uint32_t)> on_previous_prompt_;
 };
 
 } // namespace ui

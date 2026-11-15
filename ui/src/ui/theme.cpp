@@ -109,6 +109,12 @@ ThemeColors parse_colors(const QJsonObject& colors) {
   result.danger = read_color(colors, "danger", QColor(243, 139, 168));
   result.danger_text = read_color(colors, "danger_text", QColor(17, 17, 27));
 
+  // Tool strips default to the code-block fill and the muted text, so a theme
+  // that predates these keys still gets a subtle, palette-matched row.
+  result.tool_background =
+      read_color(colors, "tool_background", result.bubble_assistant_code);
+  result.tool_text = read_color(colors, "tool_text", result.text_muted);
+
   return result;
 }
 

@@ -9,6 +9,7 @@
 
         "text": [205, 214, 244, 1.0],
         "text_muted": [166, 173, 200, 1.0],
+        "tool_text": [166, 173, 200, 1.0],
 
         "accent": [245, 194, 231, 1.0],
         "accent_hover": [242, 205, 205, 1.0],
@@ -20,6 +21,7 @@
         "bubble_assistant": [49, 50, 68, 1.0],
         "bubble_assistant_text": [205, 214, 244, 1.0],
         "bubble_assistant_code": [49, 50, 68, 1.0],
+        "tool_background": [49, 50, 68, 1.0],
 
         "conversation_background": [17, 17, 27, 1.0],
         "input_background": [17, 17, 27, 1.0],
@@ -40,6 +42,7 @@
 
         "text": [202, 211, 245, 1.0],
         "text_muted": [165, 173, 203, 1.0],
+        "tool_text": [165, 173, 203, 1.0],
 
         "accent": [245, 189, 230, 1.0],
         "accent_hover": [240, 198, 198, 1.0],
@@ -51,6 +54,7 @@
         "bubble_assistant": [54, 58, 79, 1.0],
         "bubble_assistant_text": [202, 211, 245, 1.0],
         "bubble_assistant_code": [54, 58, 79, 1.0],
+        "tool_background": [54, 58, 79, 1.0],
 
         "conversation_background": [24, 25, 38, 1.0],
         "input_background": [24, 25, 38, 1.0],
@@ -71,6 +75,7 @@
 
         "text": [198, 208, 245, 1.0],
         "text_muted": [165, 173, 206, 1.0],
+        "tool_text": [165, 173, 206, 1.0],
 
         "accent": [244, 184, 228, 1.0],
         "accent_hover": [238, 190, 190, 1.0],
@@ -82,6 +87,7 @@
         "bubble_assistant": [65, 69, 89, 1.0],
         "bubble_assistant_text": [198, 208, 245, 1.0],
         "bubble_assistant_code": [65, 69, 89, 1.0],
+        "tool_background": [65, 69, 89, 1.0],
 
         "conversation_background": [35, 38, 52, 1.0],
         "input_background": [35, 38, 52, 1.0],
@@ -102,6 +108,7 @@
 
         "text": [76, 79, 105, 1.0],
         "text_muted": [108, 111, 133, 1.0],
+        "tool_text": [108, 111, 133, 1.0],
 
         "accent": [234, 118, 203, 1.0],
         "accent_hover": [221, 120, 120, 1.0],
@@ -113,6 +120,7 @@
         "bubble_assistant": [204, 208, 218, 1.0],
         "bubble_assistant_text": [76, 79, 105, 1.0],
         "bubble_assistant_code": [204, 208, 218, 1.0],
+        "tool_background": [204, 208, 218, 1.0],
 
         "conversation_background": [220, 224, 232, 1.0],
         "input_background": [220, 224, 232, 1.0],
@@ -133,6 +141,7 @@
 
         "text": [205, 214, 244, 1.0],
         "text_muted": [166, 173, 200, 0.85],
+        "tool_text": [166, 173, 200, 0.85],
 
         "accent": [245, 194, 231, 1.0],
         "accent_hover": [242, 205, 205, 1.0],
@@ -144,6 +153,7 @@
         "bubble_assistant": [49, 50, 68, 0.5],
         "bubble_assistant_text": [205, 214, 244, 1.0],
         "bubble_assistant_code": [49, 50, 68, 0.35],
+        "tool_background": [49, 50, 68, 0.35],
 
         "conversation_background": [17, 17, 27, 0.0],
         "input_background": [17, 17, 27, 0.0],
@@ -164,6 +174,7 @@
 
         "text": [202, 211, 245, 1.0],
         "text_muted": [165, 173, 203, 0.85],
+        "tool_text": [165, 173, 203, 0.85],
 
         "accent": [245, 189, 230, 1.0],
         "accent_hover": [240, 198, 198, 1.0],
@@ -175,6 +186,7 @@
         "bubble_assistant": [54, 58, 79, 0.5],
         "bubble_assistant_text": [202, 211, 245, 1.0],
         "bubble_assistant_code": [54, 58, 79, 0.35],
+        "tool_background": [54, 58, 79, 0.35],
 
         "conversation_background": [24, 25, 38, 0.0],
         "input_background": [24, 25, 38, 0.0],
@@ -195,6 +207,7 @@
 
         "text": [198, 208, 245, 1.0],
         "text_muted": [165, 173, 206, 0.85],
+        "tool_text": [165, 173, 206, 0.85],
 
         "accent": [244, 184, 228, 1.0],
         "accent_hover": [238, 190, 190, 1.0],
@@ -206,6 +219,7 @@
         "bubble_assistant": [65, 69, 89, 0.5],
         "bubble_assistant_text": [198, 208, 245, 1.0],
         "bubble_assistant_code": [65, 69, 89, 0.35],
+        "tool_background": [65, 69, 89, 0.35],
 
         "conversation_background": [35, 38, 52, 0.0],
         "input_background": [35, 38, 52, 0.0],
@@ -226,6 +240,7 @@
 
         "text": [76, 79, 105, 1.0],
         "text_muted": [108, 111, 133, 0.85],
+        "tool_text": [108, 111, 133, 0.85],
 
         "accent": [234, 118, 203, 1.0],
         "accent_hover": [221, 120, 120, 1.0],
@@ -237,6 +252,7 @@
         "bubble_assistant": [204, 208, 218, 0.5],
         "bubble_assistant_text": [76, 79, 105, 1.0],
         "bubble_assistant_code": [204, 208, 218, 0.35],
+        "tool_background": [204, 208, 218, 0.35],
 
         "conversation_background": [220, 224, 232, 0.0],
         "input_background": [220, 224, 232, 0.0],
@@ -257,6 +273,7 @@
 
         "text": [32, 35, 40, 1.0],
         "text_muted": [96, 102, 110, 1.0],
+        "tool_text": [96, 102, 110, 1.0],
 
         "accent": [9, 105, 218, 1.0],
         "accent_hover": [54, 126, 214, 1.0],
@@ -268,6 +285,7 @@
         "bubble_assistant": [243, 244, 246, 1.0],
         "bubble_assistant_text": [32, 35, 40, 1.0],
         "bubble_assistant_code": [234, 237, 240, 1.0],
+        "tool_background": [234, 237, 240, 1.0],
 
         "conversation_background": [255, 255, 255, 1.0],
         "input_background": [255, 255, 255, 1.0],
@@ -288,6 +306,7 @@
 
         "text": [220, 223, 228, 1.0],
         "text_muted": [150, 157, 168, 1.0],
+        "tool_text": [150, 157, 168, 1.0],
 
         "accent": [88, 166, 255, 1.0],
         "accent_hover": [121, 184, 255, 1.0],
@@ -299,6 +318,7 @@
         "bubble_assistant": [45, 49, 57, 1.0],
         "bubble_assistant_text": [220, 223, 228, 1.0],
         "bubble_assistant_code": [40, 44, 51, 1.0],
+        "tool_background": [40, 44, 51, 1.0],
 
         "conversation_background": [24, 26, 31, 1.0],
         "input_background": [24, 26, 31, 1.0],
@@ -319,6 +339,7 @@
 
         "text": [31, 35, 40, 1.0],
         "text_muted": [87, 96, 106, 1.0],
+        "tool_text": [87, 96, 106, 1.0],
 
         "accent": [9, 105, 218, 1.0],
         "accent_hover": [54, 126, 214, 1.0],
@@ -330,6 +351,7 @@
         "bubble_assistant": [246, 248, 250, 1.0],
         "bubble_assistant_text": [31, 35, 40, 1.0],
         "bubble_assistant_code": [234, 238, 242, 1.0],
+        "tool_background": [234, 238, 242, 1.0],
 
         "conversation_background": [255, 255, 255, 1.0],
         "input_background": [255, 255, 255, 1.0],
@@ -350,6 +372,7 @@
 
         "text": [230, 237, 243, 1.0],
         "text_muted": [139, 148, 158, 1.0],
+        "tool_text": [139, 148, 158, 1.0],
 
         "accent": [88, 166, 255, 1.0],
         "accent_hover": [121, 192, 255, 1.0],
@@ -361,6 +384,7 @@
         "bubble_assistant": [22, 27, 34, 1.0],
         "bubble_assistant_text": [230, 237, 243, 1.0],
         "bubble_assistant_code": [30, 36, 44, 1.0],
+        "tool_background": [30, 36, 44, 1.0],
 
         "conversation_background": [13, 17, 23, 1.0],
         "input_background": [13, 17, 23, 1.0],
@@ -381,6 +405,7 @@
 
         "text": [171, 178, 191, 1.0],
         "text_muted": [130, 137, 151, 1.0],
+        "tool_text": [130, 137, 151, 1.0],
 
         "accent": [97, 175, 239, 1.0],
         "accent_hover": [128, 197, 255, 1.0],
@@ -392,6 +417,7 @@
         "bubble_assistant": [50, 55, 64, 1.0],
         "bubble_assistant_text": [220, 223, 228, 1.0],
         "bubble_assistant_code": [44, 48, 56, 1.0],
+        "tool_background": [44, 48, 56, 1.0],
 
         "conversation_background": [33, 37, 43, 1.0],
         "input_background": [33, 37, 43, 1.0],
@@ -412,6 +438,7 @@
 
         "text": [216, 222, 233, 1.0],
         "text_muted": [156, 169, 188, 1.0],
+        "tool_text": [156, 169, 188, 1.0],
 
         "accent": [136, 192, 208, 1.0],
         "accent_hover": [143, 188, 187, 1.0],
@@ -423,6 +450,7 @@
         "bubble_assistant": [59, 66, 82, 1.0],
         "bubble_assistant_text": [216, 222, 233, 1.0],
         "bubble_assistant_code": [67, 76, 94, 1.0],
+        "tool_background": [67, 76, 94, 1.0],
 
         "conversation_background": [46, 52, 64, 1.0],
         "input_background": [46, 52, 64, 1.0],
@@ -443,6 +471,7 @@
 
         "text": [88, 110, 117, 1.0],
         "text_muted": [147, 161, 161, 1.0],
+        "tool_text": [147, 161, 161, 1.0],
 
         "accent": [38, 139, 210, 1.0],
         "accent_hover": [66, 166, 231, 1.0],
@@ -454,6 +483,7 @@
         "bubble_assistant": [238, 232, 213, 1.0],
         "bubble_assistant_text": [88, 110, 117, 1.0],
         "bubble_assistant_code": [230, 224, 205, 1.0],
+        "tool_background": [230, 224, 205, 1.0],
 
         "conversation_background": [253, 246, 227, 1.0],
         "input_background": [253, 246, 227, 1.0],
@@ -474,6 +504,7 @@
 
         "text": [203, 215, 215, 1.0],
         "text_muted": [131, 148, 150, 1.0],
+        "tool_text": [131, 148, 150, 1.0],
 
         "accent": [38, 139, 210, 1.0],
         "accent_hover": [66, 166, 231, 1.0],
@@ -485,6 +516,7 @@
         "bubble_assistant": [7, 54, 66, 1.0],
         "bubble_assistant_text": [203, 215, 215, 1.0],
         "bubble_assistant_code": [3, 49, 61, 1.0],
+        "tool_background": [3, 49, 61, 1.0],
 
         "conversation_background": [0, 43, 54, 1.0],
         "input_background": [0, 43, 54, 1.0],
@@ -505,6 +537,7 @@
 
         "text": [235, 220, 195, 1.0],
         "text_muted": [176, 155, 128, 1.0],
+        "tool_text": [176, 155, 128, 1.0],
 
         "accent": [214, 158, 74, 1.0],
         "accent_hover": [231, 179, 97, 1.0],
@@ -516,6 +549,7 @@
         "bubble_assistant": [41, 31, 24, 1.0],
         "bubble_assistant_text": [235, 220, 195, 1.0],
         "bubble_assistant_code": [31, 23, 18, 1.0],
+        "tool_background": [31, 23, 18, 1.0],
 
         "conversation_background": [24, 18, 14, 1.0],
         "input_background": [24, 18, 14, 1.0],
@@ -536,6 +570,7 @@
 
         "text": [235, 220, 195, 1.0],
         "text_muted": [176, 155, 128, 0.85],
+        "tool_text": [176, 155, 128, 0.85],
 
         "accent": [214, 158, 74, 1.0],
         "accent_hover": [231, 179, 97, 1.0],
@@ -547,6 +582,7 @@
         "bubble_assistant": [41, 31, 24, 0.5],
         "bubble_assistant_text": [235, 220, 195, 1.0],
         "bubble_assistant_code": [31, 23, 18, 0.35],
+        "tool_background": [31, 23, 18, 0.35],
 
         "conversation_background": [24, 18, 14, 0.0],
         "input_background": [24, 18, 14, 0.0],
@@ -567,6 +603,7 @@
 
         "text": [58, 44, 32, 1.0],
         "text_muted": [122, 103, 82, 1.0],
+        "tool_text": [122, 103, 82, 1.0],
 
         "accent": [166, 54, 43, 1.0],
         "accent_hover": [190, 71, 57, 1.0],
@@ -578,6 +615,7 @@
         "bubble_assistant": [240, 232, 213, 1.0],
         "bubble_assistant_text": [58, 44, 32, 1.0],
         "bubble_assistant_code": [230, 219, 196, 1.0],
+        "tool_background": [230, 219, 196, 1.0],
 
         "conversation_background": [249, 243, 228, 1.0],
         "input_background": [249, 243, 228, 1.0],
@@ -598,6 +636,7 @@
 
         "text": [214, 226, 210, 1.0],
         "text_muted": [146, 164, 152, 1.0],
+        "tool_text": [146, 164, 152, 1.0],
 
         "accent": [198, 166, 92, 1.0],
         "accent_hover": [219, 188, 112, 1.0],
@@ -609,6 +648,7 @@
         "bubble_assistant": [27, 36, 32, 1.0],
         "bubble_assistant_text": [214, 226, 210, 1.0],
         "bubble_assistant_code": [21, 29, 26, 1.0],
+        "tool_background": [21, 29, 26, 1.0],
 
         "conversation_background": [16, 22, 20, 1.0],
         "input_background": [16, 22, 20, 1.0],
@@ -629,6 +669,7 @@
 
         "text": [232, 226, 244, 1.0],
         "text_muted": [172, 162, 194, 1.0],
+        "tool_text": [172, 162, 194, 1.0],
 
         "accent": [212, 175, 95, 1.0],
         "accent_hover": [232, 199, 126, 1.0],
@@ -640,6 +681,7 @@
         "bubble_assistant": [36, 30, 55, 1.0],
         "bubble_assistant_text": [232, 226, 244, 1.0],
         "bubble_assistant_code": [29, 24, 45, 1.0],
+        "tool_background": [29, 24, 45, 1.0],
 
         "conversation_background": [24, 20, 38, 1.0],
         "input_background": [24, 20, 38, 1.0],

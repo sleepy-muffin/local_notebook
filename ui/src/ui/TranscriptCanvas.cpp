@@ -547,6 +547,10 @@ public:
     on_branch_ = std::move(handler);
   }
 
+  void set_on_previous_prompt(std::function<void(std::uint32_t)> handler) {
+    on_previous_prompt_ = std::move(handler);
+  }
+
 private:
   QToolButton*
   make_button(const QString& icon, QStyle::StandardPixmap fallback, const QString& tip);
@@ -561,6 +565,7 @@ private:
   QToolButton* copy_ = nullptr;
   QToolButton* edit_ = nullptr;
   QToolButton* branch_ = nullptr;
+  QToolButton* previous_ = nullptr;
   QToolButton* remove_ = nullptr;
 
   std::uint32_t message_id_ = 0;
@@ -573,6 +578,7 @@ private:
   std::function<void(std::uint32_t)> on_edit_;
   std::function<void(std::uint32_t)> on_delete_;
   std::function<void(std::uint32_t)> on_branch_;
+  std::function<void(std::uint32_t)> on_previous_prompt_;
 };
 
 MessageActionsBar::MessageActionsBar(QWidget* parent) : QWidget(parent) {
@@ -599,6 +605,8 @@ MessageActionsBar::MessageActionsBar(QWidget* parent) : QWidget(parent) {
 
   copy_ = make_button(QStringLiteral("copy"), QStyle::SP_DialogSaveButton, trs("Copy message"));
   edit_ = make_button(QStringLiteral("edit"), QStyle::SP_FileIcon, trs("Edit message"));
+  previous_ = make_button(
+      QStringLiteral("back"), QStyle::SP_ArrowUp, trs("Go to the previous prompt"));
   branch_ = make_button(
       QStringLiteral("branch"), QStyle::SP_ArrowForward, trs("Branch conversation"));
   remove_ = make_button(QStringLiteral("delete"), QStyle::SP_TrashIcon, trs("Delete message"));
@@ -609,6 +617,7 @@ MessageActionsBar::MessageActionsBar(QWidget* parent) : QWidget(parent) {
   row->addWidget(status_);
   row->addWidget(copy_);
   row->addWidget(edit_);
+  row->addWidget(previous_);
   row->addWidget(branch_);
   row->addWidget(remove_);
 
@@ -633,6 +642,12 @@ MessageActionsBar::MessageActionsBar(QWidget* parent) : QWidget(parent) {
   connect(branch_, &QToolButton::clicked, this, [this]() {
     if (on_branch_) {
       on_branch_(message_id_);
+    }
+  });
+
+  connect(previous_, &QToolButton::clicked, this, [this]() {
+    if (on_previous_prompt_) {
+      on_previous_prompt_(message_id_);
     }
   });
 
@@ -701,6 +716,7 @@ void MessageActionsBar::apply_style() {
 
   apply_icon(copy_, QStringLiteral("copy"), QStyle::SP_DialogSaveButton);
   apply_icon(edit_, QStringLiteral("edit"), QStyle::SP_FileIcon);
+  apply_icon(previous_, QStringLiteral("back"), QStyle::SP_ArrowUp);
   apply_icon(branch_, QStringLiteral("branch"), QStyle::SP_ArrowForward);
   apply_icon(remove_, QStringLiteral("delete"), QStyle::SP_TrashIcon);
 }
@@ -731,6 +747,8 @@ void MessageActionsBar::set_message(const render::MessageMeta& meta) {
 
   copy_->setVisible(meta.role == render::Role::Assistant);
   edit_->setVisible(meta.editable);
+  // "Go to previous prompt" only makes sense on a stored assistant reply.
+  previous_->setVisible(meta.role == render::Role::Assistant && meta.id != 0 && !meta.streaming);
   // A branch needs a stored message to copy; a streaming reply has no id yet.
   branch_->setVisible(meta.id != 0 && !meta.streaming);
   remove_->setVisible(true);
@@ -822,6 +840,8 @@ struct TranscriptCanvas::Private {
     result.danger_background = to_color(c.danger);
     result.danger_text = to_color(c.danger_text);
     result.border = to_color(c.border);
+    result.tool_background = to_color(c.tool_background);
+    result.tool_text = to_color(c.tool_text);
 
     QColor selected = c.accent;
     selected.setAlpha(90);
@@ -1225,6 +1245,12 @@ TranscriptCanvas::TranscriptCanvas(QWidget* parent)
     }
   });
 
+  d_->actions->set_on_previous_prompt([this](std::uint32_t id) {
+    if (on_previous_prompt_) {
+      on_previous_prompt_(id);
+    }
+  });
+
   d_->drag_timer = new QTimer(this);
   d_->drag_timer->setInterval(30);
 
@@ -1372,6 +1398,19 @@ void TranscriptCanvas::scroll_to_bottom() {
   verticalScrollBar()->setValue(verticalScrollBar()->maximum());
 }
 
+void TranscriptCanvas::scroll_to_message(std::uint32_t id) {
+  const auto index = d_->layout.message_by_id(id);
+
+  if (!index.has_value() || *index >= d_->layout.message_geometry().size()) {
+    return;
+  }
+
+  auto* bar = verticalScrollBar();
+  const float y = d_->layout.message_geometry()[*index].rect.y;
+  const int value = static_cast<int>(std::lround(y + d_->origin() - 12.0f));
+  bar->setValue(std::clamp(value, 0, bar->maximum()));
+}
+
 std::u16string TranscriptCanvas::selected_text() const {
   return d_->layout.selected_text(d_->selection);
 }
@@ -1394,6 +1433,10 @@ void TranscriptCanvas::set_on_delete(std::function<void(std::uint32_t)> handler)
 
 void TranscriptCanvas::set_on_branch(std::function<void(std::uint32_t)> handler) {
   on_branch_ = std::move(handler);
+}
+
+void TranscriptCanvas::set_on_previous_prompt(std::function<void(std::uint32_t)> handler) {
+  on_previous_prompt_ = std::move(handler);
 }
 
 void TranscriptCanvas::paintEvent(QPaintEvent* event) {

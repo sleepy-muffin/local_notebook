@@ -65,7 +65,7 @@ enum class TextAlign { Left, Center, Right };
 
 // Who wrote a message. The role decides the body colour, the line-height rhythm
 // and whether the message is drawn on a filled block.
-enum class Role { User, Assistant, Notice, Error };
+enum class Role { User, Assistant, Notice, Error, Tool };
 
 // The visual shape of one block of a message.
 enum class BlockKind {
