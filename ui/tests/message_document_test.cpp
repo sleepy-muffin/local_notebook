@@ -170,9 +170,18 @@ bool reasoning_encrypted_only_shows_json() {
 
 // Empty and malformed payloads produce nothing to draw.
 bool reasoning_empty_payloads() {
+  // A provider-supplied summary consisting only of whitespace would otherwise
+  // draw a titled strip with no body.
+  const std::string whitespace_only = R"({
+    "reasoning_items":[
+      {"type":"reasoning","summary":[{"type":"summary_text","text":" "}]}
+    ]
+  })";
+
   if (!ui::reasoning::display_text("").empty() ||
       !ui::reasoning::display_text("not json").empty() ||
-      !ui::reasoning::display_text(R"({"reasoning_items":[]})").empty()) {
+      !ui::reasoning::display_text(R"({"reasoning_items":[]})").empty() ||
+      !ui::reasoning::display_text(whitespace_only).empty()) {
     std::fprintf(stderr, "FAIL: empty reasoning payload produced text\n");
     return false;
   }

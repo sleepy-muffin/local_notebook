@@ -776,8 +776,9 @@ void ConversationView::append_rendered_message(
       text = from_utf8(
           reasoning::display_text(message.reasoning_payload_.value_or(std::string{})));
 
-      // An old-schema row may carry an empty payload; never draw an empty strip.
-      if (text.isEmpty()) {
+      // An old-schema row may carry an empty payload, and a provider can send a
+      // whitespace-only summary; never draw an empty strip either way.
+      if (text.trimmed().isEmpty()) {
         return;
       }
       break;

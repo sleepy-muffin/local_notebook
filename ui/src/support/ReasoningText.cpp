@@ -71,6 +71,13 @@ std::string display_text(const std::string& payload) {
   }
 
   if (!out.empty()) {
+    // A provider can send a summary whose only text is whitespace (see the
+    // single-space `summary_text` some chat-completions replies return). That
+    // draws a title with no body, so treat it as no readable content.
+    if (out.find_first_not_of(" \t\n\r\f\v") == std::string::npos) {
+      return {};
+    }
+
     return out;
   }
 
