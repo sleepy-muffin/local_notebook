@@ -105,6 +105,7 @@ SessionEditor::SessionEditor(
   auto* buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, this);
   buttons->button(QDialogButtonBox::Save)->setObjectName(QStringLiteral("Primary"));
   buttons->button(QDialogButtonBox::Cancel)->setObjectName(QStringLiteral("Secondary"));
+  strip_button_icons(buttons);
   connect(buttons, &QDialogButtonBox::accepted, this, [this]() { save_session(); });
   connect(buttons, &QDialogButtonBox::rejected, this, [this]() { reject(); });
 

@@ -5,9 +5,12 @@
 // window reads the same way (design-1.md §12: chrome drawn consistently, QSS kept
 // to small scoped pieces).
 
+#include <QAbstractButton>
 #include <QColor>
+#include <QDialogButtonBox>
 #include <QFont>
 #include <QFormLayout>
+#include <QIcon>
 #include <QLabel>
 #include <QListWidget>
 #include <QListWidgetItem>
@@ -214,6 +217,19 @@ inline void style_navigation_rail(QListWidget* nav) {
     if (QListWidgetItem* item = nav->item(row)) {
       item->setSizeHint(QSize(0, row_height));
     }
+  }
+}
+
+// Drops the icon the platform style attaches to the standard buttons of a
+// QDialogButtonBox. The application's dialogs are text-only: an icon beside
+// "Save" or "Cancel" is platform chrome the rest of the window does not share.
+inline void strip_button_icons(QDialogButtonBox* box) {
+  if (box == nullptr) {
+    return;
+  }
+
+  for (QAbstractButton* button : box->buttons()) {
+    button->setIcon(QIcon());
   }
 }
 
