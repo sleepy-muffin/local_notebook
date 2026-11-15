@@ -45,10 +45,12 @@ public:
   [[nodiscard]] bool send(std::string text);
 
   // Steers the in-flight turn with a prompt typed while it runs. Only the text
-  // travels to the worker: it is stored there, after the rows of the interrupted
-  // request, so the transcript's id order stays truthful, and the worker runs one
-  // more iteration so the model answers it in this same turn. Returns false when
-  // no turn is in flight (the caller should `send` instead) or the text is empty.
+  // travels to the worker: it waits in the queue until the current request has
+  // finished, then the worker stores it after that request's rows (so the
+  // transcript's id order stays truthful) and runs one more iteration so the
+  // model answers it in this same turn. A steer never cuts the streaming reply
+  // short. Returns false when no turn is in flight (the caller should `send`
+  // instead) or the text is empty.
   [[nodiscard]] bool steer(std::string text);
 
   // A prompt typed while the turn runs and not yet delivered to it. `serial` is
@@ -118,7 +120,7 @@ private:
     std::vector<event> events;
 
     // Prompts typed while the turn runs, in order. The worker takes them through
-    // `take_steering` during the stream; see `client::prompt`.
+    // `take_steering` between iterations; see `client::prompt`.
     std::vector<steer_entry> steered;
   };
 

@@ -214,13 +214,13 @@ public:
   // call. Auto-compaction runs at the head of each iteration. The whole turn
   // streams through `events`; it blocks the calling thread, so run it on a worker.
   // `take_steering` (optional) is how a prompt typed while the turn is running
-  // joins it. It is called on the worker thread (during the stream, so a steer
-  // cuts the current reply short instead of waiting for it) and returns every
-  // prompt queued since the last call, clearing them. The worker stores each one
-  // after the rows the interrupted request already produced — the transcript's id
-  // order is the conversation's order, so the prompt must not be written by the
-  // thread that merely typed it — then runs another iteration so the model
-  // answers it in this same turn.
+  // joins it. It is called on the worker thread once per iteration, after that
+  // request's rows are stored, and returns every prompt queued since the last
+  // call, clearing them. A queued prompt is never delivered mid-stream: it must
+  // not cut a reply short. The worker stores each one after the rows the finished
+  // request produced — the transcript's id order is the conversation's order, so
+  // the prompt must not be written by the thread that merely typed it — then runs
+  // another iteration so the model answers it in this same turn.
   void prompt(
     std::stop_token stop,
     size_type session_id,

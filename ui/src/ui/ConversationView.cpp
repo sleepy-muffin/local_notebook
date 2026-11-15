@@ -1137,7 +1137,8 @@ void ConversationView::steer(const QString& text) {
   }
 
   // The row lands later, from the worker (`on_steered`), so nothing is reloaded
-  // here: the streaming reply keeps streaming until it is actually cut.
+  // here: the running reply finishes first, then the queued prompt joins the
+  // turn as its next request.
   input_->clear();
   set_busy(controller_.busy());
   refresh_steer_queue();

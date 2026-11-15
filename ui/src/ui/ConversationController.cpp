@@ -74,8 +74,8 @@ bool ConversationController::send(std::string text) {
 
   handle_ = executor_.spawn(
       [client, sid, user_message_id, events, state](std::stop_token stop) mutable {
-        // The worker consumes the steered prompts *during* the stream, so a steer
-        // cuts the current reply short instead of waiting for it to finish.
+        // The worker drains the queued prompts at each request boundary, so they
+        // never interrupt a reply that is still streaming.
         const std::function<std::vector<std::string>()> take = [state]() {
           std::scoped_lock lock(state->mutex);
           std::vector<std::string> pending;

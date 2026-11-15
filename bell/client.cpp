@@ -654,61 +654,27 @@ void felis::bell::client::prompt(
     // until the turn ended and the DB round-trip split them apart again.
     if (events.on_message_begin) events.on_message_begin();
 
-    // A prompt typed while this reply streams joins the turn right here: the
-    // stream callback notices it, the reply is cut short, and the loop runs one
-    // more iteration so the model answers the steer inside this same turn. The
-    // texts travel from the GUI as plain strings, not as already-stored rows, so
-    // the worker stores them *after* the rows this interrupted request produced —
-    // id order is conversation order.
-    std::string partial_text;
-    std::vector<std::string> steered_prompts;
-    bool steered = false;
-
-    // Called from the stream callback, i.e. on this worker thread. Returns true
-    // once a steer was taken; `on_text` signals the cut to `llm` by returning
-    // false. `on_reasoning` cannot abort on its own, so it only records the steer
-    // and the next text delta ends the stream (a reply that never emits text is
-    // picked up after the stream returns).
-    auto take_pending_steering = [&]() -> bool {
-      if (steered || !take_steering) {
-        return steered;
-      }
-
-      std::vector<std::string> pending = take_steering();
-      if (pending.empty()) {
-        return false;
-      }
-
-      steered_prompts = std::move(pending);
-      steered = true;
-      return true;
-    };
-
     // Forward the visible text and hidden reasoning to the caller as they
-    // stream. The stop token is observed inside `stream_llm_request`, so `on_text`
-    // never has to abort on cancellation here.
+    // stream. A prompt typed meanwhile is only *queued*; it is never delivered
+    // mid-stream, so it cannot cut this reply short. The queue is drained after
+    // the request's rows are stored, and the loop then runs one more iteration
+    // so the model answers the queued prompts inside this same turn.
     felis::net::llm::StreamCallbacks main_cbs;
     main_cbs.on_text = [&](std::string_view delta) -> bool {
-      // Keep our own copy: an aborted stream returns no `Result`, so this buffer
-      // is the only record of the reply the user already saw.
-      partial_text.append(delta);
       if (events.on_text) events.on_text(delta);
-      return !take_pending_steering();
+      return true;
     };
     main_cbs.on_reasoning = [&](std::string_view delta) {
       if (events.on_reasoning) events.on_reasoning(delta);
-      take_pending_steering();
     };
 
     std::string request_error;
     std::optional<felis::net::llm::Result> result = stream_llm_request(
       stop, payload, assistant_snapshot, main_cbs, request_error);
 
-    // A cut stream is a *soft* stop, not a failure: `llm` reports it as an error
-    // but the reason was our own steer, so fall through with the buffered text.
     const felis::net::llm::Result* v = result ? &*result : nullptr;
 
-    if (v == nullptr && !steered) {
+    if (v == nullptr) {
       ok = false;
       error = request_error;
       break;
@@ -804,9 +770,8 @@ void felis::bell::client::prompt(
     }
 
     // The proxy rejects empty assistant text items, so only persist a reply
-    // that actually carries something to replay. A cut-short reply has no
-    // `Result`; its text is whatever the user already saw.
-    const std::string& reply_text = v != nullptr ? v->text : partial_text;
+    // that actually carries something to replay.
+    const std::string& reply_text = v->text;
     if (!reply_text.empty()) {
       append_message(session_id, shadowed_message(reply_text, message_kind::assistant_output));
     }
@@ -831,26 +796,27 @@ void felis::bell::client::prompt(
       }
     }
 
-    // A steer that arrived too late to interrupt the stream — the model emitted
-    // no text, or the reply finished first — is consumed here so it is never
-    // lost. It is stored after the request's own rows (text, calls, results),
-    // which keeps the transcript's id order truthful.
-    if (!steered) {
-      take_pending_steering();
+    // Prompts typed while this request ran are taken now, after its rows (text,
+    // calls, results). They travel from the GUI as plain strings, not as
+    // already-stored rows, so the worker stores them here — id order is
+    // conversation order.
+    std::vector<std::string> steered_prompts;
+    if (take_steering) {
+      steered_prompts = take_steering();
     }
 
-    if (steered) {
+    if (!steered_prompts.empty()) {
       for (const std::string& prompt : steered_prompts) {
         const size_type steer_id =
           append_message(session_id, shadowed_message(prompt, message_kind::user_prompt));
         if (events.on_steered) events.on_steered(steer_id);
       }
 
-      // Answer the steer in this same turn instead of parking it until the user
-      // sends again.
+      // Answer the queued prompts in this same turn instead of parking them
+      // until the user sends again.
       idle = false;
     } else {
-      idle = v == nullptr || v->tool_calls.empty();
+      idle = v->tool_calls.empty();
     }
   }
 
