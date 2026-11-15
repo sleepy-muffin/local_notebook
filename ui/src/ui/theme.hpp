@@ -93,10 +93,10 @@ const QFont& ui_font();
 const QFont& chat_font();
 const QFont& mono_font();
 
-// Inline code size as a fraction of the surrounding text. Inline code is scaled
-// from the paragraph it sits in (so headings keep their proportions) rather
-// than from the configured monospace size.
-float inline_code_scale();
+// Monospace size as a fraction of the surrounding text. It applies to every
+// mono run: inline code (scaled from the paragraph it sits in, so headings keep
+// their proportions) and fenced code blocks (scaled from the mono size).
+float mono_scale();
 
 // Tool-call/result strip size as a fraction of the prose size. The strip is
 // deliberately subtle: it recedes below the messages it annotates.

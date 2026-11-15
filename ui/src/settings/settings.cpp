@@ -111,7 +111,7 @@ QJsonObject to_json(const Settings& settings) {
   object["font_size"] = settings.font_size;
   object["mono_font"] = QString::fromStdString(settings.mono_font);
   object["mono_font_size"] = settings.mono_font_size;
-  object["inline_code_scale"] = static_cast<double>(settings.inline_code_scale);
+  object["mono_scale"] = static_cast<double>(settings.mono_scale);
   object["tool_text_scale"] = static_cast<double>(settings.tool_text_scale);
 
   object["auto_login"] = settings.auto_login;
@@ -162,8 +162,12 @@ Settings from_json(const QJsonObject& object) {
   settings.font_size = object.value("font_size").toInt(settings.font_size);
   settings.mono_font = object.value("mono_font").toString().toStdString();
   settings.mono_font_size = object.value("mono_font_size").toInt(settings.mono_font_size);
-  settings.inline_code_scale =
-      static_cast<float>(object.value("inline_code_scale").toDouble(settings.inline_code_scale));
+  // `inline_code_scale` is the pre-rename key; keep reading it so an existing
+  // settings file keeps its value.
+  const QJsonValue mono_scale = object.contains("mono_scale")
+      ? object.value("mono_scale")
+      : object.value("inline_code_scale");
+  settings.mono_scale = static_cast<float>(mono_scale.toDouble(settings.mono_scale));
   settings.tool_text_scale =
       static_cast<float>(object.value("tool_text_scale").toDouble(settings.tool_text_scale));
 

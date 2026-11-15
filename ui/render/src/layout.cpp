@@ -272,7 +272,9 @@ void Layout::replace_last_message_blocks(std::vector<Block> blocks) {
 
 Font Layout::block_font(const Block& block) const {
   if (block.kind == BlockKind::Code) {
-    return theme_.mono;
+    Font font = theme_.mono;
+    font.size *= theme_.mono_scale;
+    return font;
   }
 
   if (block.kind == BlockKind::Heading && block.heading_level > 0) {
@@ -360,7 +362,7 @@ float Layout::shape_block(
     // Inline code follows the block's own font size (so headings scale it too)
     // instead of the configured monospace size.
     spec.code_font = theme_.mono;
-    spec.code_font.size = base.size * theme_.inline_code_scale;
+    spec.code_font.size = base.size * theme_.mono_scale;
     spec.base_color = color;
     spec.link_color = theme_.link;
     spec.code_color = color;

@@ -524,7 +524,7 @@ void felis::bell::client::prompt(
     size_type session_id,
     size_type user_message_id,
     const prompt_events& events,
-    const std::function<std::uint32_t()>& drain_steering) {
+    const std::function<std::vector<std::string>()>& take_steering) {
 
   std::optional<session> loaded = db_->get_session(session_id);
   if (!loaded.has_value()) {
@@ -639,15 +639,6 @@ void felis::bell::client::prompt(
 
     const std::vector<shadowed_message> msgs = request_messages(session_id, false);
 
-    // The newest id this request carries. A steer that arrived *after* this read
-    // is newer than everything here and has to wait for one more iteration; one
-    // that arrived before it is already inside the request and must not force a
-    // duplicate answer.
-    std::uint32_t requested_id = 0;
-    for (const shadowed_message& message : msgs) {
-      requested_id = std::max(requested_id, message.id_);
-    }
-
     const auto payload = build_responses_request(
       sess.custom_instructions(),
       msgs,
@@ -663,29 +654,65 @@ void felis::bell::client::prompt(
     // until the turn ended and the DB round-trip split them apart again.
     if (events.on_message_begin) events.on_message_begin();
 
+    // A prompt typed while this reply streams joins the turn right here: the
+    // stream callback notices it, the reply is cut short, and the loop runs one
+    // more iteration so the model answers the steer inside this same turn. The
+    // texts travel from the GUI as plain strings, not as already-stored rows, so
+    // the worker stores them *after* the rows this interrupted request produced —
+    // id order is conversation order.
+    std::string partial_text;
+    std::vector<std::string> steered_prompts;
+    bool steered = false;
+
+    // Called from the stream callback, i.e. on this worker thread. Returns true
+    // once a steer was taken; `on_text` signals the cut to `llm` by returning
+    // false. `on_reasoning` cannot abort on its own, so it only records the steer
+    // and the next text delta ends the stream (a reply that never emits text is
+    // picked up after the stream returns).
+    auto take_pending_steering = [&]() -> bool {
+      if (steered || !take_steering) {
+        return steered;
+      }
+
+      std::vector<std::string> pending = take_steering();
+      if (pending.empty()) {
+        return false;
+      }
+
+      steered_prompts = std::move(pending);
+      steered = true;
+      return true;
+    };
+
     // Forward the visible text and hidden reasoning to the caller as they
     // stream. The stop token is observed inside `stream_llm_request`, so `on_text`
     // never has to abort on cancellation here.
     felis::net::llm::StreamCallbacks main_cbs;
     main_cbs.on_text = [&](std::string_view delta) -> bool {
+      // Keep our own copy: an aborted stream returns no `Result`, so this buffer
+      // is the only record of the reply the user already saw.
+      partial_text.append(delta);
       if (events.on_text) events.on_text(delta);
-      return true;
+      return !take_pending_steering();
     };
     main_cbs.on_reasoning = [&](std::string_view delta) {
       if (events.on_reasoning) events.on_reasoning(delta);
+      take_pending_steering();
     };
 
     std::string request_error;
     std::optional<felis::net::llm::Result> result = stream_llm_request(
       stop, payload, assistant_snapshot, main_cbs, request_error);
 
-    if (!result.has_value()) {
+    // A cut stream is a *soft* stop, not a failure: `llm` reports it as an error
+    // but the reason was our own steer, so fall through with the buffered text.
+    const felis::net::llm::Result* v = result ? &*result : nullptr;
+
+    if (v == nullptr && !steered) {
       ok = false;
       error = request_error;
       break;
     }
-
-    const felis::net::llm::Result& v = *result;
 
     // Measure this request against the turn's opening user message; reported
     // usage is exactly what the auto-compact predicate reads next round. This is
@@ -693,11 +720,11 @@ void felis::bell::client::prompt(
     // be none (tool-only reply, no reasoning item) or several (text + N calls), so
     // no single message owns this measurement. See the `request_usage` schema
     // comment in `database.cpp` for the full rationale.
-    if (v.usage.reported) {
+    if (v != nullptr && v->usage.reported) {
       db_->record_request_usage(
         user_message_id,
-        static_cast<std::uint32_t>(v.usage.input_tokens),
-        static_cast<std::uint32_t>(v.usage.output_tokens));
+        static_cast<std::uint32_t>(v->usage.input_tokens),
+        static_cast<std::uint32_t>(v->usage.output_tokens));
     }
 
     // std::cout << std::format("Remote: {}\n", v.text);
@@ -711,11 +738,11 @@ void felis::bell::client::prompt(
     // `encrypted_content` (GPT/o-series) or with a readable `summary`, and this
     // code stores whichever it received. A model that returns no `reasoning` item
     // (plain chat-completions output) simply produces no row.
-    {
+    if (v != nullptr) {
       boost::json::array reasoning_items;
       std::set<std::string> seen_reasoning_ids;
 
-      for (const boost::json::object& item : v.response_items) {
+      for (const boost::json::object& item : v->response_items) {
         const boost::json::value* type = item.if_contains("type");
         if (type == nullptr || !type->is_string() || type->as_string() != "reasoning") {
           continue;
@@ -751,6 +778,21 @@ void felis::bell::client::prompt(
         reasoning_items.emplace_back(std::move(normalized));
       }
 
+      // A chat-completions reasoning model (DeepSeek) streams its thinking through
+      // `on_reasoning` instead of returning a `reasoning` item, so it would be
+      // lost once the turn ended. Record it as a display-only item: with no
+      // `encrypted_content` it is never replayed to the model.
+      if (reasoning_items.empty() && !v->reasoning.empty()) {
+        boost::json::object content;
+        content["type"] = "reasoning_text";
+        content["text"] = v->reasoning;
+
+        boost::json::object synthetic;
+        synthetic["type"] = "reasoning";
+        synthetic["content"] = boost::json::array{std::move(content)};
+        reasoning_items.emplace_back(std::move(synthetic));
+      }
+
       if (!reasoning_items.empty()) {
         boost::json::object envelope;
         envelope["reasoning_items"] = std::move(reasoning_items);
@@ -762,18 +804,20 @@ void felis::bell::client::prompt(
     }
 
     // The proxy rejects empty assistant text items, so only persist a reply
-    // that actually carries something to replay.
-    if (!v.text.empty()) {
-      append_message(session_id, shadowed_message(v.text, message_kind::assistant_output));
+    // that actually carries something to replay. A cut-short reply has no
+    // `Result`; its text is whatever the user already saw.
+    const std::string& reply_text = v != nullptr ? v->text : partial_text;
+    if (!reply_text.empty()) {
+      append_message(session_id, shadowed_message(reply_text, message_kind::assistant_output));
     }
 
-    if (!v.tool_calls.empty()) {
-      for (const auto& call : v.tool_calls) {
+    if (v != nullptr && !v->tool_calls.empty()) {
+      for (const auto& call : v->tool_calls) {
         append_message(
           session_id, shadowed_message(call.arguments, message_kind::assistant_tool_call, {call.id, call.name}));
       }
 
-      for (const auto& call : v.tool_calls) {
+      for (const auto& call : v->tool_calls) {
         if (events.on_status) events.on_status("Running " + call.name);
         std::string tool_output = felis::bell::execute_local_tool(
           call,
@@ -785,14 +829,28 @@ void felis::bell::client::prompt(
         append_message(
           session_id, shadowed_message(tool_output, message_kind::tool_result, {call.id, call.name}));
       }
+    }
 
+    // A steer that arrived too late to interrupt the stream — the model emitted
+    // no text, or the reply finished first — is consumed here so it is never
+    // lost. It is stored after the request's own rows (text, calls, results),
+    // which keeps the transcript's id order truthful.
+    if (!steered) {
+      take_pending_steering();
+    }
+
+    if (steered) {
+      for (const std::string& prompt : steered_prompts) {
+        const size_type steer_id =
+          append_message(session_id, shadowed_message(prompt, message_kind::user_prompt));
+        if (events.on_steered) events.on_steered(steer_id);
+      }
+
+      // Answer the steer in this same turn instead of parking it until the user
+      // sends again.
       idle = false;
     } else {
-      // A prompt steered in while this reply was streaming deserves an answer in
-      // the same turn: rerunning the loop picks it up from the transcript instead
-      // of leaving it parked until the user sends again.
-      const std::uint32_t steered_id = drain_steering ? drain_steering() : 0;
-      idle = steered_id <= requested_id;
+      idle = v == nullptr || v->tool_calls.empty();
     }
   }
 

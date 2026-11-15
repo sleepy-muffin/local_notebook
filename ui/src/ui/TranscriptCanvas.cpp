@@ -861,7 +861,7 @@ struct TranscriptCanvas::Private {
     render::LayoutTheme result;
     result.body = to_font(chat_font());
     result.mono = to_font(mono_font());
-    result.inline_code_scale = inline_code_scale();
+    result.mono_scale = mono_scale();
     result.tool_font_scale = tool_text_scale();
 
     result.text = to_color(c.text);
@@ -1357,11 +1357,11 @@ void TranscriptCanvas::clear() {
   viewport()->update();
 }
 
-void TranscriptCanvas::begin_streaming() {
+void TranscriptCanvas::begin_streaming(render::Role role) {
   const bool follow = at_bottom();
 
   render::MessageMeta meta;
-  meta.role = render::Role::Assistant;
+  meta.role = role;
   meta.id = 0;
   meta.streaming = true;
 

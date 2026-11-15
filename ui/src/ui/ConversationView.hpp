@@ -34,6 +34,7 @@ namespace ui {
 class StatusNotice;
 class TranscriptCanvas;
 class ReasoningSelector;
+class SteerQueue;
 
 // The chat pane for one session: transcript on top, composer at the bottom. The
 // view is passive — it renders the stored transcript and forwards intent to its
@@ -94,6 +95,12 @@ private:
   void append_rendered_message(
       render::Document& document, const felis::bell::shadowed_message& message) const;
 
+  // One block holding a bold title line and a body, drawn at the subtle tool
+  // font size. Shared by the stored tool/reasoning strips and the live reasoning
+  // bubble so both read the same.
+  [[nodiscard]] std::vector<render::Block>
+  make_strip_blocks(const QString& title, const QString& body) const;
+
   void load_older();
   void prompt_edit(std::uint32_t message_id, const QString& current);
   void flush_streaming_text();
@@ -102,6 +109,10 @@ private:
   // is already on screen.
   void steer(const QString& text);
   void set_busy(bool busy);
+
+  // Mirrors the controller's pending-steer queue into the strip above the
+  // composer. The strip hides itself when the queue is empty.
+  void refresh_steer_queue();
 
   void apply_composer_style();
   void apply_composer_height();
@@ -135,14 +146,20 @@ private:
 
   QWidget* composer_bar_ = nullptr;
   StatusNotice* notice_ = nullptr;
+  SteerQueue* steer_queue_ = nullptr;
 
   bool composer_expanded_ = false;
 
-  // Streaming state.
-  bool streaming_started_ = false;
+  // Streaming state. Reasoning and reply text are separate canvas messages
+  // because they read at different roles (subtle tool bubble vs. bare prose);
+  // reasoning is appended first and the reply after it.
+  bool reasoning_streaming_ = false;
+  bool text_streaming_ = false;
   QString streaming_status_;
   QTimer* stream_timer_ = nullptr;
+  QString pending_reasoning_text_;
   QString pending_stream_text_;
+  bool has_pending_reasoning_ = false;
   bool has_pending_stream_ = false;
 
   std::function<void()> on_changed_;

@@ -2,6 +2,7 @@
 #include <cstdio>
 #include <string_view>
 
+#include "support/ReasoningText.hpp"
 #include "ui/MessageDocument.hpp"
 
 namespace {
@@ -126,6 +127,59 @@ bool br_in_code_is_literal() {
   return true;
 }
 
+// A readable summary/content becomes the reasoning strip's text.
+bool reasoning_readable_parts() {
+  const std::string summary =
+      R"({"reasoning_items":[{"type":"reasoning","summary":[{"type":"summary_text","text":"first"}]}]})";
+  const std::string content =
+      R"({"reasoning_items":[{"type":"reasoning","content":[{"type":"reasoning_text","text":"second"}]}]})";
+  const std::string both = R"({"reasoning_items":[
+      {"type":"reasoning","summary":[{"type":"summary_text","text":"a"}],
+       "content":[{"type":"reasoning_text","text":"b"}]},
+      {"type":"reasoning","content":[{"type":"reasoning_text","text":"c"}]}
+  ]})";
+
+  if (ui::reasoning::display_text(summary) != "first" ||
+      ui::reasoning::display_text(content) != "second") {
+    std::fprintf(stderr, "FAIL: reasoning summary/content was not extracted\n");
+    return false;
+  }
+
+  if (ui::reasoning::display_text(both) != "a\n\nb\n\nc") {
+    std::fprintf(stderr, "FAIL: multiple reasoning items were not joined in order\n");
+    return false;
+  }
+
+  return true;
+}
+
+// Encrypted-only items have no readable text, so the payload itself is shown.
+bool reasoning_encrypted_only_shows_json() {
+  const std::string payload =
+      R"({"reasoning_items":[{"type":"reasoning","encrypted_content":"gAAAA"}]})";
+  const std::string shown = ui::reasoning::display_text(payload);
+
+  if (shown.find("encrypted_content") == std::string::npos ||
+      shown.find("gAAAA") == std::string::npos) {
+    std::fprintf(stderr, "FAIL: encrypted-only reasoning did not fall back to JSON\n");
+    return false;
+  }
+
+  return true;
+}
+
+// Empty and malformed payloads produce nothing to draw.
+bool reasoning_empty_payloads() {
+  if (!ui::reasoning::display_text("").empty() ||
+      !ui::reasoning::display_text("not json").empty() ||
+      !ui::reasoning::display_text(R"({"reasoning_items":[]})").empty()) {
+    std::fprintf(stderr, "FAIL: empty reasoning payload produced text\n");
+    return false;
+  }
+
+  return true;
+}
+
 } // namespace
 
 int main() {
@@ -134,5 +188,8 @@ int main() {
   ok = hard_break_in_table_cell() && ok;
   ok = unclosed_html_is_literal() && ok;
   ok = br_in_code_is_literal() && ok;
+  ok = reasoning_readable_parts() && ok;
+  ok = reasoning_encrypted_only_shows_json() && ok;
+  ok = reasoning_empty_payloads() && ok;
   return ok ? 0 : 1;
 }

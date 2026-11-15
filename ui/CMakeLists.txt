@@ -20,6 +20,7 @@ add_subdirectory(render)
 set(LOCAL_NOTEBOOK_UI_SOURCES
         src/settings/settings.cpp
         src/support/i18n.cpp
+        src/support/ReasoningText.cpp
 
         src/ui/AssistantForm.cpp
         src/ui/AssistantPicker.cpp

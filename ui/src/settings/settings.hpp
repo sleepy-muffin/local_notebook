@@ -45,9 +45,10 @@ struct Settings {
   std::string mono_font = "JetBrains Mono";
   int mono_font_size = 11;
 
-  // Inline code size as a fraction of the surrounding text. Inline code is
-  // scaled from the chat font so it never feels oversized next to the prose.
-  float inline_code_scale = 0.9f;
+  // Monospace text scale as a fraction of its surrounding size. It applies to
+  // every mono run: inline code (scaled from the chat font) and fenced code
+  // blocks (scaled from the monospace size).
+  float mono_scale = 0.9f;
 
   // Tool-call/result strip size as a fraction of the prose size. The strip is
   // deliberately subtle, so it draws smaller than the messages it annotates.

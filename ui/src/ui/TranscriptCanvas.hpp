@@ -46,10 +46,12 @@ public:
   void set_document(render::Document document, const ScrollAnchor& anchor, bool follow_bottom);
   void clear();
 
-  // Streaming: appends an id-less assistant message, then replaces only that
-  // message's blocks as text arrives. The tail relayout keeps the rest of the
-  // transcript's shaped paragraphs untouched.
-  void begin_streaming();
+  // Streaming: appends an id-less message, then replaces only that message's
+  // blocks as text arrives. The tail relayout keeps the rest of the transcript's
+  // shaped paragraphs untouched. `role` picks how the growing bubble reads: an
+  // assistant reply is bare prose, while a `Role::Tool` message carries the
+  // subtle bubble used for reasoning.
+  void begin_streaming(render::Role role = render::Role::Assistant);
   void set_streaming_blocks(std::vector<render::Block> blocks);
 
   [[nodiscard]] ScrollAnchor anchor() const;

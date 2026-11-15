@@ -31,6 +31,7 @@
 
 #include "client.hpp"
 #include "settings/settings.hpp"
+#include "support/ReasoningText.hpp"
 #include "support/i18n.hpp"
 #include "ui/MessageDocument.hpp"
 #include "ui/StatusNotice.hpp"
@@ -218,6 +219,198 @@ private:
   bool menu_open_ = false;
 };
 
+// -----------------------------------------------------------------------------
+// SteerQueue
+// -----------------------------------------------------------------------------
+
+// The strip above the composer listing prompts typed while a turn was running
+// and not yet delivered to it. The queue itself lives in the controller, so the
+// worker may empty it at any moment; this only mirrors it. Each row can be
+// dismissed before the worker takes it. Painted by hand, like the composer's
+// other bare controls, so it follows the theme exactly and elides long prompts
+// itself instead of widening the window.
+class SteerQueue : public QWidget {
+public:
+  explicit SteerQueue(QWidget* parent = nullptr) : QWidget(parent) {
+    setObjectName(QStringLiteral("SteerQueue"));
+    setFont(ui_font());
+    setMouseTracking(true);
+    setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+    setVisible(false);
+  }
+
+  void set_entries(std::vector<ConversationController::steer_entry> entries) {
+    entries_ = std::move(entries);
+
+    if (hover_row_ >= static_cast<int>(entries_.size())) {
+      hover_row_ = -1;
+      hover_remove_ = false;
+    }
+
+    update_geometry();
+    update();
+    setVisible(!entries_.empty());
+  }
+
+  void set_on_remove(std::function<void(std::uint64_t)> handler) {
+    on_remove_ = std::move(handler);
+  }
+
+  // Re-reads the font (a metric change) and repaints after a theme change.
+  void refresh_style() {
+    setFont(ui_font());
+    update_geometry();
+    update();
+  }
+
+  [[nodiscard]] QSize sizeHint() const override {
+    return QSize(0, height_for(static_cast<int>(entries_.size())));
+  }
+
+protected:
+  void paintEvent(QPaintEvent*) override {
+    if (entries_.empty()) {
+      return;
+    }
+
+    const ThemeColors& colors = theme().colors;
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+
+    const QFontMetrics fm(font());
+
+    for (int row = 0; row < static_cast<int>(entries_.size()); ++row) {
+      const QRect box = row_rect(row);
+
+      painter.setPen(Qt::NoPen);
+      painter.setBrush(row == hover_row_ ? row_hover_background() : colors.tool_background);
+      painter.drawRoundedRect(box, 4, 4);
+
+      // A chevron marker: this prompt joins the running turn rather than
+      // standing as its own message yet.
+      QPen marker(colors.tool_text);
+      marker.setWidthF(1.3);
+      marker.setCapStyle(Qt::RoundCap);
+      marker.setJoinStyle(Qt::RoundJoin);
+      painter.setBrush(Qt::NoBrush);
+      painter.setPen(marker);
+
+      const qreal mx = box.left() + 12.0;
+      const qreal my = static_cast<qreal>(box.center().y());
+      painter.drawLine(QPointF(mx - 3.0, my - 3.0), QPointF(mx, my));
+      painter.drawLine(QPointF(mx, my), QPointF(mx - 3.0, my + 3.0));
+
+      // The prompt, one line, elided.
+      const QRect text_rect = box.adjusted(22, 0, -(kRemoveWidth + 6), 0);
+      painter.setPen(colors.tool_text);
+      painter.drawText(
+          text_rect, Qt::AlignLeft | Qt::AlignVCenter,
+          fm.elidedText(from_utf8(entries_[static_cast<std::size_t>(row)].text), Qt::ElideRight,
+                        text_rect.width()));
+
+      // The dismiss cross, brightening under the pointer.
+      const QRect remove = remove_rect(row);
+      const bool active = row == hover_row_ && hover_remove_;
+
+      QPen cross(active ? colors.accent : colors.text_muted);
+      cross.setWidthF(1.3);
+      cross.setCapStyle(Qt::RoundCap);
+      painter.setPen(cross);
+
+      const QPointF centre = QRectF(remove).center();
+      const qreal radius = 3.5;
+      painter.drawLine(QPointF(centre.x() - radius, centre.y() - radius),
+                       QPointF(centre.x() + radius, centre.y() + radius));
+      painter.drawLine(QPointF(centre.x() + radius, centre.y() - radius),
+                       QPointF(centre.x() - radius, centre.y() + radius));
+    }
+  }
+
+  void mouseMoveEvent(QMouseEvent* event) override {
+    const int row = row_at(event->pos());
+    const bool over_remove = row >= 0 && remove_rect(row).contains(event->pos());
+
+    if (row != hover_row_ || over_remove != hover_remove_) {
+      hover_row_ = row;
+      hover_remove_ = over_remove;
+      setCursor(over_remove ? Qt::PointingHandCursor : Qt::ArrowCursor);
+      update();
+    }
+
+    QWidget::mouseMoveEvent(event);
+  }
+
+  void leaveEvent(QEvent* event) override {
+    if (hover_row_ != -1) {
+      hover_row_ = -1;
+      hover_remove_ = false;
+      setCursor(Qt::ArrowCursor);
+      update();
+    }
+
+    QWidget::leaveEvent(event);
+  }
+
+  void mousePressEvent(QMouseEvent* event) override {
+    if (event->button() == Qt::LeftButton) {
+      const int row = row_at(event->pos());
+
+      if (row >= 0 && remove_rect(row).contains(event->pos()) && on_remove_) {
+        on_remove_(entries_[static_cast<std::size_t>(row)].serial);
+        return;
+      }
+    }
+
+    QWidget::mousePressEvent(event);
+  }
+
+private:
+  static constexpr int kRemoveWidth = 18;
+  static constexpr int kRowSpacing = 2;
+
+  [[nodiscard]] int row_height() const { return QFontMetrics(font()).height() + 6; }
+
+  [[nodiscard]] int height_for(int rows) const {
+    if (rows <= 0) {
+      return 0;
+    }
+
+    return rows * row_height() + (rows - 1) * kRowSpacing + 4;
+  }
+
+  void update_geometry() {
+    setFixedHeight(height_for(static_cast<int>(entries_.size())));
+    updateGeometry();
+  }
+
+  [[nodiscard]] QRect row_rect(int row) const {
+    const int pad = metrics().page_margin;
+
+    return QRect(
+        pad, row * (row_height() + kRowSpacing) + 2, std::max(0, width() - 2 * pad), row_height());
+  }
+
+  [[nodiscard]] QRect remove_rect(int row) const {
+    const QRect box = row_rect(row);
+    return QRect(box.right() - kRemoveWidth, box.top(), kRemoveWidth, box.height());
+  }
+
+  [[nodiscard]] int row_at(const QPoint& pos) const {
+    for (int row = 0; row < static_cast<int>(entries_.size()); ++row) {
+      if (row_rect(row).contains(pos)) {
+        return row;
+      }
+    }
+
+    return -1;
+  }
+
+  std::vector<ConversationController::steer_entry> entries_;
+  std::function<void(std::uint64_t)> on_remove_;
+  int hover_row_ = -1;
+  bool hover_remove_ = false;
+};
+
 ConversationView::ConversationView(
     felis::bell::client& api, const lnb::Settings& settings, std::uint32_t session_id,
     felis::async::multi_executor<void()>& executor, QWidget* parent)
@@ -240,7 +433,14 @@ ConversationView::ConversationView(
   transcript_->set_on_copy([this](std::uint32_t message_id) {
     for (const felis::bell::shadowed_message& message: messages_) {
       if (message.id_ == message_id) {
-        QApplication::clipboard()->setText(from_utf8(message.content_));
+        // A reasoning row's visible text is derived from its payload, not stored
+        // in `content_`, so copy the same text the strip shows.
+        if (message.kind_ == felis::bell::message_kind::assistant_reasoning_payload) {
+          QApplication::clipboard()->setText(
+              from_utf8(reasoning::display_text(message.reasoning_payload_.value_or(std::string{}))));
+        } else {
+          QApplication::clipboard()->setText(from_utf8(message.content_));
+        }
         return;
       }
     }
@@ -391,6 +591,16 @@ ConversationView::ConversationView(
   notice_ = new StatusNotice(this);
   layout->addWidget(notice_);
 
+  // Prompts typed while a turn runs wait here until the worker takes them; each
+  // row can be dismissed before delivery. It sits directly above the composer.
+  steer_queue_ = new SteerQueue(this);
+  steer_queue_->set_on_remove([this](std::uint64_t serial) {
+    if (controller_.remove_steer(serial)) {
+      refresh_steer_queue();
+    }
+  });
+  layout->addWidget(steer_queue_);
+
   layout->addWidget(composer);
 
   apply_composer_style();
@@ -415,9 +625,17 @@ ConversationView::ConversationView(
   });
 
   controller_.set_on_stream([this](const std::string& text) {
-    if (!streaming_started_) {
-      streaming_started_ = true;
-      transcript_->begin_streaming();
+    if (!text_streaming_) {
+      // Only the last canvas message can be updated in place, so the reasoning
+      // bubble must be materialised before the reply becomes the last one.
+      if (reasoning_streaming_ && has_pending_reasoning_) {
+        transcript_->set_streaming_blocks(
+            make_strip_blocks(trs("Reasoning"), pending_reasoning_text_));
+        has_pending_reasoning_ = false;
+      }
+
+      text_streaming_ = true;
+      transcript_->begin_streaming(render::Role::Assistant);
     }
 
     // `on_text` delivers incremental deltas (one per streamed token/chunk), so
@@ -432,27 +650,42 @@ ConversationView::ConversationView(
     }
   });
 
-  controller_.set_on_reasoning([this](const std::string&) {
-    // Reasoning is not shown in the transcript; it is context work only.
+  controller_.set_on_reasoning([this](const std::string& text) {
+    // Reasoning streams live as its own subtle bubble, ahead of the reply.
+    if (text_streaming_) {
+      // The reply owns the growing tail now, so a late reasoning delta cannot be
+      // drawn in place; the stored row shows it after the next reload.
+      return;
+    }
+
+    if (!reasoning_streaming_) {
+      reasoning_streaming_ = true;
+      transcript_->begin_streaming(render::Role::Tool);
+    }
+
+    pending_reasoning_text_ += from_utf8(text);
+    has_pending_reasoning_ = true;
+
+    if (!stream_timer_->isActive()) {
+      stream_timer_->start();
+    }
   });
 
   controller_.set_on_status([this](const std::string& status) {
     streaming_status_ = from_utf8(status);
 
-    if (!streaming_started_) {
-      streaming_started_ = true;
-      transcript_->begin_streaming();
+    // The status note is only a placeholder for a reply that has produced no
+    // text or reasoning yet; anything already streaming owns the bubble.
+    if (text_streaming_ || reasoning_streaming_) {
+      return;
     }
 
-    // Status is only a placeholder shown until the reply text starts arriving;
-    // it must not be mixed into the accumulated reply (see the flush below,
-    // which prefers reply text and falls back to this status).
-    if (pending_stream_text_.isEmpty()) {
-      has_pending_stream_ = true;
+    text_streaming_ = true;
+    transcript_->begin_streaming(render::Role::Assistant);
+    has_pending_stream_ = true;
 
-      if (!stream_timer_->isActive()) {
-        stream_timer_->start();
-      }
+    if (!stream_timer_->isActive()) {
+      stream_timer_->start();
     }
   });
 
@@ -460,6 +693,12 @@ ConversationView::ConversationView(
     if (notice_ != nullptr) {
       notice_->set_content(QStringLiteral("warning"), from_utf8(reason));
     }
+  });
+
+  controller_.set_on_steered([this](std::uint32_t message_id) {
+    // The worker just stored the steered prompt; mark its row so the reload that
+    // follows (from `on_changed`) can label it.
+    steered_ids_.insert(message_id);
   });
 
   reload();
@@ -473,10 +712,13 @@ void ConversationView::reload() {
     stream_timer_->stop();
   }
 
+  has_pending_reasoning_ = false;
   has_pending_stream_ = false;
+  pending_reasoning_text_.clear();
   pending_stream_text_.clear();
   streaming_status_.clear();
-  streaming_started_ = false;
+  reasoning_streaming_ = false;
+  text_streaming_ = false;
 
   messages_ = api_.messages(felis::bell::size_type(session_id_));
 
@@ -523,6 +765,23 @@ void ConversationView::append_rendered_message(
       break;
     case message_kind::assistant_output:
       break;
+    case message_kind::assistant_reasoning_payload: {
+      // Reasoning is context work, not a turn: it reads as a subtle strip like a
+      // tool note. The payload is display-only, so its text is derived here; an
+      // encrypted-only item falls back to its raw JSON.
+      role = render::Role::Tool;
+      markdown = false;
+      editable = false;
+      title = trs("Reasoning");
+      text = from_utf8(
+          reasoning::display_text(message.reasoning_payload_.value_or(std::string{})));
+
+      // An old-schema row may carry an empty payload; never draw an empty strip.
+      if (text.isEmpty()) {
+        return;
+      }
+      break;
+    }
     case message_kind::inline_compact:
       // A summary is generated text, not a turn: it gets the same subtle
       // colours and smaller size as a tool strip.
@@ -579,22 +838,27 @@ void ConversationView::append_rendered_message(
     // A strip: the title line plus the detail line in one block, so the two
     // share the strip's single (smaller) tool font size. The title is bold only,
     // never larger, so it reads as a label rather than a heading.
-    render::Block strip;
-    strip.kind = render::BlockKind::Paragraph;
-    strip.text = to_u16(title);
-    render::Span span;
-    span.length = static_cast<std::uint32_t>(strip.text.size());
-    span.bold = true;
-    strip.spans.push_back(span);
-    strip.text += u'\n';
-    strip.text += to_u16(text);
-    blocks.push_back(std::move(strip));
+    blocks = make_strip_blocks(title, text);
   } else {
     blocks = markdown ? make_markdown_blocks(text.toStdString())
                       : make_plain_blocks(text.toStdString());
   }
 
   append_message(document, std::move(meta), std::move(blocks));
+}
+
+std::vector<render::Block>
+ConversationView::make_strip_blocks(const QString& title, const QString& body) const {
+  render::Block strip;
+  strip.kind = render::BlockKind::Paragraph;
+  strip.text = to_u16(title);
+  render::Span span;
+  span.length = static_cast<std::uint32_t>(strip.text.size());
+  span.bold = true;
+  strip.spans.push_back(span);
+  strip.text += u'\n';
+  strip.text += to_u16(body);
+  return {std::move(strip)};
 }
 
 void ConversationView::rebuild_transcript(
@@ -613,12 +877,22 @@ void ConversationView::load_older() {
   rebuild_transcript(anchor, false);
 }
 
+void ConversationView::refresh_steer_queue() {
+  if (steer_queue_ != nullptr) {
+    steer_queue_->set_entries(controller_.queued_steers());
+  }
+}
+
 void ConversationView::refresh_style() {
   apply_composer_style();
   apply_composer_height();
 
   if (transcript_ != nullptr) {
     transcript_->refresh_style();
+  }
+
+  if (steer_queue_ != nullptr) {
+    steer_queue_->refresh_style();
   }
 
   refresh_reasoning_selector();
@@ -649,7 +923,15 @@ void ConversationView::refresh_reasoning_selector() {
 }
 
 void ConversationView::flush_streaming_text() {
-  if (!has_pending_stream_ || !streaming_started_) {
+  // Reasoning owns the tail only until the reply starts; once the reply message
+  // is the last one, this bubble can no longer be rewritten in place.
+  if (has_pending_reasoning_ && reasoning_streaming_ && !text_streaming_) {
+    transcript_->set_streaming_blocks(
+        make_strip_blocks(trs("Reasoning"), pending_reasoning_text_));
+  }
+  has_pending_reasoning_ = false;
+
+  if (!has_pending_stream_ || !text_streaming_) {
     return;
   }
 
@@ -664,6 +946,9 @@ void ConversationView::flush_streaming_text() {
 void ConversationView::poll() {
   controller_.poll();
   set_busy(controller_.busy());
+  // The worker drains the queue as soon as it takes a steering prompt, so the
+  // strip must follow it on every tick, not only when the user edits it.
+  refresh_steer_queue();
 }
 
 void ConversationView::set_failure_notice_handler(std::function<void()> handler) {
@@ -836,19 +1121,11 @@ void ConversationView::submit() {
   }
 
   set_busy(controller_.busy());
+  refresh_steer_queue();
 }
 
 void ConversationView::steer(const QString& text) {
-  // `steer` rebuilds the transcript from the database (so the new bubble shows),
-  // and a rebuild tears down the streaming tail. Keep the reply that is already
-  // on screen so it does not blink away mid-sentence.
-  const bool was_streaming = streaming_started_;
-  const QString pending = pending_stream_text_;
-  const QString status = streaming_status_;
-
-  const std::uint32_t steered_id = controller_.steer(text.toStdString());
-
-  if (steered_id == 0) {
+  if (!controller_.steer(text.toStdString())) {
     // The turn ended while the user was typing: treat it as a fresh send so the
     // text is never silently swallowed.
     if (controller_.send(text.toStdString())) {
@@ -859,23 +1136,11 @@ void ConversationView::steer(const QString& text) {
     return;
   }
 
+  // The row lands later, from the worker (`on_steered`), so nothing is reloaded
+  // here: the streaming reply keeps streaming until it is actually cut.
   input_->clear();
-  steered_ids_.insert(steered_id);
-
-  // The controller's rebuild ran before this id was known, so rebuild once more
-  // for the "Steered" label; one user action, two cheap database reads.
-  reload();
-
-  if (was_streaming) {
-    streaming_started_ = true;
-    transcript_->begin_streaming();
-    pending_stream_text_ = pending;
-    streaming_status_ = status;
-    has_pending_stream_ = true;
-    flush_streaming_text();
-  }
-
   set_busy(controller_.busy());
+  refresh_steer_queue();
 }
 
 } // namespace ui

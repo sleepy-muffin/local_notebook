@@ -44,12 +44,26 @@ public:
   // empty. Returns whether a turn was started.
   [[nodiscard]] bool send(std::string text);
 
-  // Steers the in-flight turn with a prompt typed while it runs. The prompt is
-  // persisted now — on the GUI thread, so the bubble appears at once — and the
-  // worker is asked to run one more iteration so the model answers it in this
-  // same turn. Returns the new message id, or 0 when no turn is in flight (the
-  // caller should `send` instead) or the text is empty.
-  [[nodiscard]] std::uint32_t steer(std::string text);
+  // Steers the in-flight turn with a prompt typed while it runs. Only the text
+  // travels to the worker: it is stored there, after the rows of the interrupted
+  // request, so the transcript's id order stays truthful, and the worker runs one
+  // more iteration so the model answers it in this same turn. Returns false when
+  // no turn is in flight (the caller should `send` instead) or the text is empty.
+  [[nodiscard]] bool steer(std::string text);
+
+  // A prompt typed while the turn runs and not yet delivered to it. `serial` is
+  // its identity for removal: the worker drains the whole queue at once, so an
+  // index would be ambiguous the moment a drain races a click.
+  struct steer_entry {
+    std::uint64_t serial = 0;
+    std::string text;
+  };
+
+  // Snapshot of the queue, in the order the prompts will be delivered.
+  [[nodiscard]] std::vector<steer_entry> queued_steers() const;
+
+  // Drops one queued prompt. Returns false when the worker already took it.
+  bool remove_steer(std::uint64_t serial);
 
   // Requests the in-flight turn to stop. The partial reply is discarded by bell.
   void cancel();
@@ -75,17 +89,26 @@ public:
   void set_on_error(std::function<void(const std::string&)> handler) {
     on_error_ = std::move(handler);
   }
+  // Reports the id of a row the worker stored for a steered prompt, so the view
+  // can mark it and reload the transcript.
+  void set_on_steered(std::function<void(std::uint32_t)> handler) {
+    on_steered_ = std::move(handler);
+  }
 
   // Drains the worker's queued events and dispatches them on the calling (GUI)
   // thread. Call from the window's poll timer.
   void poll();
 
 private:
-  enum class event_kind { text, reasoning, status, message_begin, done_ok, done_error };
+  enum class event_kind {
+    text, reasoning, status, message_begin, steered, done_ok, done_error
+  };
 
   struct event {
     event_kind kind;
     std::string text;
+    // The message id, for `steered`.
+    std::uint32_t id = 0;
   };
 
   // Shared with the worker's event lambdas so a push after this controller is
@@ -94,9 +117,9 @@ private:
     std::mutex mutex;
     std::vector<event> events;
 
-    // Newest prompt steered into the running turn, 0 when none is pending. The
-    // worker consumes it through `drain_steering`; see `client::prompt`.
-    std::uint32_t steered_id = 0;
+    // Prompts typed while the turn runs, in order. The worker takes them through
+    // `take_steering` during the stream; see `client::prompt`.
+    std::vector<steer_entry> steered;
   };
 
   void push(event_kind kind, std::string_view text);
@@ -107,6 +130,9 @@ private:
 
   std::shared_ptr<shared_state> state_ = std::make_shared<shared_state>();
 
+  // Identity for queued steers. Only touched on the GUI thread.
+  std::uint64_t next_steer_serial_ = 1;
+
   felis::async::multi_executor<void()>::handle handle_;
 
   std::function<void()> on_changed_;
@@ -114,6 +140,7 @@ private:
   std::function<void(const std::string&)> on_reasoning_;
   std::function<void(const std::string&)> on_status_;
   std::function<void(const std::string&)> on_error_;
+  std::function<void(std::uint32_t)> on_steered_;
 };
 
 } // namespace ui

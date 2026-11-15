@@ -41,7 +41,7 @@ bool theme_inputs_equal(const lnb::Settings& a, const lnb::Settings& b) {
          a.ui_font_size == b.ui_font_size && a.font == b.font &&
          a.font_size == b.font_size && a.mono_font == b.mono_font &&
          a.mono_font_size == b.mono_font_size &&
-         a.inline_code_scale == b.inline_code_scale &&
+         a.mono_scale == b.mono_scale &&
          a.tool_text_scale == b.tool_text_scale &&
          a.background_url == b.background_url &&
          a.background_override == b.background_override && a.metrics == b.metrics;
@@ -218,13 +218,13 @@ QWidget* SettingsWindow::build_config_page() {
     mono_font_ = new FontComboBox(content);
     mono_font_size_ = make_size(settings_.mono_font_size);
 
-    inline_code_scale_ = new DoubleSpinBox(content);
-    inline_code_scale_->setRange(0.50, 1.50);
-    inline_code_scale_->setSingleStep(0.05);
-    inline_code_scale_->setDecimals(2);
-    inline_code_scale_->setValue(static_cast<double>(settings_.inline_code_scale));
-    inline_code_scale_->setToolTip(
-        trs("Inline code size as a fraction of the surrounding text.")
+    mono_scale_ = new DoubleSpinBox(content);
+    mono_scale_->setRange(0.50, 1.50);
+    mono_scale_->setSingleStep(0.05);
+    mono_scale_->setDecimals(2);
+    mono_scale_->setValue(static_cast<double>(settings_.mono_scale));
+    mono_scale_->setToolTip(
+        trs("Mono size as a fraction of the surrounding text.")
     );
 
     tool_text_scale_ = new DoubleSpinBox(content);
@@ -242,7 +242,7 @@ QWidget* SettingsWindow::build_config_page() {
     form->addRow(field_label(content, trs("Chat size")), font_size_);
     form->addRow(field_label(content, trs("Monospace font")), mono_font_);
     form->addRow(field_label(content, trs("Monospace size")), mono_font_size_);
-    form->addRow(field_label(content, trs("Inline code size")), inline_code_scale_);
+    form->addRow(field_label(content, trs("Mono size")), mono_scale_);
     form->addRow(field_label(content, trs("Tool strip size")), tool_text_scale_);
 
     layout->addLayout(form);
@@ -463,7 +463,7 @@ void SettingsWindow::reload_from_app() {
   font_size_->setValue(settings_.font_size);
   set_font_box(mono_font_, settings_.mono_font);
   mono_font_size_->setValue(settings_.mono_font_size);
-  inline_code_scale_->setValue(static_cast<double>(settings_.inline_code_scale));
+  mono_scale_->setValue(static_cast<double>(settings_.mono_scale));
   tool_text_scale_->setValue(static_cast<double>(settings_.tool_text_scale));
 
   if (assistant_form_ != nullptr) {
@@ -518,7 +518,7 @@ void SettingsWindow::save() {
   settings_.font_size = font_size_->value();
   settings_.mono_font = stored_family(mono_font_, settings_.mono_font);
   settings_.mono_font_size = mono_font_size_->value();
-  settings_.inline_code_scale = static_cast<float>(inline_code_scale_->value());
+  settings_.mono_scale = static_cast<float>(mono_scale_->value());
   settings_.tool_text_scale = static_cast<float>(tool_text_scale_->value());
 
   // Write the metric boxes back into a full ThemeMetrics and store it as the

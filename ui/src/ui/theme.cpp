@@ -40,8 +40,9 @@ struct ThemeState {
   QFont chat_font;
   QFont mono_font;
 
-  // Inline code size as a fraction of the surrounding text.
-  float inline_code_scale = 0.9f;
+  // Monospace size as a fraction of the surrounding text. It applies to every
+  // mono run: inline code and fenced code blocks.
+  float mono_scale = 0.9f;
 
   // Tool-call/result strip size as a fraction of the prose size.
   float tool_text_scale = 0.88f;
@@ -408,10 +409,10 @@ void apply_theme(QApplication& app, const lnb::Settings& settings) {
   mono.setFixedPitch(true);
   current.mono_font = mono;
 
-  // A non-positive or missing value would collapse inline code to nothing, so
+  // A non-positive or missing value would collapse mono text to nothing, so
   // fall back to the default ratio.
-  current.inline_code_scale =
-      settings.inline_code_scale > 0.0f ? settings.inline_code_scale : 0.9f;
+  current.mono_scale =
+      settings.mono_scale > 0.0f ? settings.mono_scale : 0.9f;
 
   // Same guard for the tool strip: a zero would make it disappear entirely.
   current.tool_text_scale =
@@ -474,8 +475,8 @@ const QFont& mono_font() {
   return state().mono_font;
 }
 
-float inline_code_scale() {
-  return state().inline_code_scale;
+float mono_scale() {
+  return state().mono_scale;
 }
 
 float tool_text_scale() {

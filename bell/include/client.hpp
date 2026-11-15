@@ -35,6 +35,10 @@ struct prompt_events {
   std::function<void(std::string_view)> on_status;
   std::function<void()> on_message_begin;
   std::function<void(bool ok, std::string_view error)> on_done;
+  // Fires for every prompt steered into the running turn, with the id of the row
+  // that now carries it. Emitted on the worker thread after the interrupted
+  // request's own rows are stored, so the transcript order stays truthful.
+  std::function<void(size_type)> on_steered;
 };
 
 struct assistant_state {
@@ -209,21 +213,20 @@ public:
   // (request -> persist reply -> run any tools) until the model returns no tool
   // call. Auto-compaction runs at the head of each iteration. The whole turn
   // streams through `events`; it blocks the calling thread, so run it on a worker.
-  //
-  // `drain_steering` (optional) is how a prompt typed while the turn is running
-  // joins it: the caller persists that prompt on its own thread and then arms a
-  // flag this callback consumes, returning the newest steered message id (0 when
-  // nothing is pending). It is called on the worker thread when the model stops
-  // calling tools; an id newer than anything in the request just sent means the
-  // steer missed that request and the loop must run once more. No text crosses
-  // this boundary — the database is the channel, and `request_messages` re-reads
-  // it every iteration.
+  // `take_steering` (optional) is how a prompt typed while the turn is running
+  // joins it. It is called on the worker thread (during the stream, so a steer
+  // cuts the current reply short instead of waiting for it) and returns every
+  // prompt queued since the last call, clearing them. The worker stores each one
+  // after the rows the interrupted request already produced — the transcript's id
+  // order is the conversation's order, so the prompt must not be written by the
+  // thread that merely typed it — then runs another iteration so the model
+  // answers it in this same turn.
   void prompt(
     std::stop_token stop,
     size_type session_id,
     size_type user_message_id,
     const prompt_events& events,
-    const std::function<std::uint32_t()>& drain_steering = {}
+    const std::function<std::vector<std::string>()>& take_steering = {}
   );
 
   // Merges the assistant's memory from two pools: each standard session's newest

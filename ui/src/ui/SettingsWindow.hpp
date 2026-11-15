@@ -95,15 +95,15 @@ private:
   QSpinBox* history_page_ = nullptr;
 
   // Typography. Each family selector maps to a Settings string (empty means the
-  // system default) and each size to the matching point size; the inline-code
-  // ratio scales monospace inside prose relative to the chat font.
+  // system default) and each size to the matching point size; the mono ratio
+  // scales every monospace run — inline code and code blocks.
   FontComboBox* ui_font_ = nullptr;
   QSpinBox* ui_font_size_ = nullptr;
   FontComboBox* font_ = nullptr;
   QSpinBox* font_size_ = nullptr;
   FontComboBox* mono_font_ = nullptr;
   QSpinBox* mono_font_size_ = nullptr;
-  QDoubleSpinBox* inline_code_scale_ = nullptr;
+  QDoubleSpinBox* mono_scale_ = nullptr;
   QDoubleSpinBox* tool_text_scale_ = nullptr;
 
   // One spin box per editable ThemeMetrics field, so load/save and "restore to

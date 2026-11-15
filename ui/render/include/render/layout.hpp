@@ -57,10 +57,11 @@ struct LayoutTheme {
   float bubble_radius = 8.0f;
   float code_radius = 6.0f;
 
-  // Inline code is scaled from the surrounding text rather than from the
-  // configured monospace size, so it keeps its proportions inside headings and
-  // never looks oversized next to the prose.
-  float inline_code_scale = 0.9f;
+  // Monospace text is scaled as a fraction of its surrounding size. It applies
+  // to every mono run: inline code (scaled from the chat font, so it keeps its
+  // proportions inside headings) and fenced code blocks (scaled from the
+  // configured monospace size).
+  float mono_scale = 0.9f;
 
   // Tool-call/result rows draw smaller than prose so they recede into the
   // background as a one-line note rather than a full message.

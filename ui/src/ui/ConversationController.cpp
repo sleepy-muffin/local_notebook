@@ -55,6 +55,12 @@ bool ConversationController::send(std::string text) {
     std::scoped_lock lock(state->mutex);
     state->events.push_back(event{event_kind::message_begin, std::string()});
   };
+  events.on_steered = [state](felis::bell::size_type id) {
+    std::scoped_lock lock(state->mutex);
+    event item{event_kind::steered, std::string()};
+    item.id = id.get();
+    state->events.push_back(std::move(item));
+  };
   events.on_done = [state](bool ok, std::string_view error) {
     std::scoped_lock lock(state->mutex);
     state->events.push_back(
@@ -68,17 +74,20 @@ bool ConversationController::send(std::string text) {
 
   handle_ = executor_.spawn(
       [client, sid, user_message_id, events, state](std::stop_token stop) mutable {
-        // The worker only learns *that* a prompt was steered in; the prompt itself
-        // was written to the transcript by `steer`, which `prompt` re-reads every
-        // iteration. `state` outlives this controller.
-        const std::function<std::uint32_t()> drain = [state]() {
+        // The worker consumes the steered prompts *during* the stream, so a steer
+        // cuts the current reply short instead of waiting for it to finish.
+        const std::function<std::vector<std::string>()> take = [state]() {
           std::scoped_lock lock(state->mutex);
-          const std::uint32_t steered = state->steered_id;
-          state->steered_id = 0;
-          return steered;
+          std::vector<std::string> pending;
+          pending.reserve(state->steered.size());
+          for (steer_entry& entry : state->steered) {
+            pending.push_back(std::move(entry.text));
+          }
+          state->steered.clear();
+          return pending;
         };
 
-        client->prompt(stop, sid, user_message_id, events, drain);
+        client->prompt(stop, sid, user_message_id, events, take);
       }
   );
 
@@ -93,27 +102,40 @@ bool ConversationController::send(std::string text) {
 
 void ConversationController::cancel() { handle_.request_stop(); }
 
-std::uint32_t ConversationController::steer(std::string text) {
+bool ConversationController::steer(std::string text) {
   if (!busy() || text.empty()) {
-    return 0;
+    return false;
   }
 
-  // Persist on the GUI thread, exactly like a normal send, so the bubble is in the
-  // transcript before the view rebuilds and the row already owns a real id — the
-  // worker compares that id against what its last request carried.
-  const felis::bell::size_type steered_id =
-      client_.begin_turn(felis::bell::size_type(session_id_), text);
-
+  // Only the text crosses to the worker. Storing the row here would append it
+  // before the reply it interrupts (the reply is only persisted at end of
+  // stream), which would reorder the transcript.
   {
     std::scoped_lock lock(state_->mutex);
-    state_->steered_id = std::max(state_->steered_id, steered_id.get());
+    state_->steered.push_back(steer_entry{next_steer_serial_++, std::move(text)});
   }
 
-  if (on_changed_) {
-    on_changed_();
+  return true;
+}
+
+std::vector<ConversationController::steer_entry> ConversationController::queued_steers() const {
+  std::scoped_lock lock(state_->mutex);
+  return state_->steered;
+}
+
+bool ConversationController::remove_steer(std::uint64_t serial) {
+  std::scoped_lock lock(state_->mutex);
+
+  const auto it = std::find_if(
+      state_->steered.begin(), state_->steered.end(),
+      [serial](const steer_entry& entry) { return entry.serial == serial; });
+
+  if (it == state_->steered.end()) {
+    return false;
   }
 
-  return steered_id.get();
+  state_->steered.erase(it);
+  return true;
 }
 
 void ConversationController::delete_message_only(std::uint32_t message_id) {
@@ -161,6 +183,16 @@ void ConversationController::poll() {
         // A new assistant message is starting: rebuild the transcript from the DB
         // so the previous message stays a separate bubble (its text is already
         // persisted) and the incoming deltas begin a fresh streaming bubble.
+        if (on_changed_) {
+          on_changed_();
+        }
+        break;
+      case event_kind::steered:
+        // The worker stored the steered prompt; mark it, then reload so its
+        // bubble appears in place.
+        if (on_steered_) {
+          on_steered_(item.id);
+        }
         if (on_changed_) {
           on_changed_();
         }
