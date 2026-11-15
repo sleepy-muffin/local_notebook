@@ -50,18 +50,18 @@ struct BudgetPreset {
 };
 
 constexpr BudgetPreset kBudgetPresets[] = {
-    // Each row is a model context window, with the trigger set to the 90% mark
-    // Zed uses before compacting, the preserved tail at roughly a tenth of the
-    // window, and a summary budget large enough to carry tool output and file
-    // paths forward. 80k and up is the range Zed considers viable for automatic
-    // compaction at all.
-    {"Instant",       28'800,   4'000,   8'000,   4'000}, //  32k window
-    {"Very Light",    57'600,   6'000,  12'000,   8'000}, //  64k window
-    {"Light",       115'200,  12'000,  16'000,  16'000}, // 128k window
-    {"Balanced",    180'000,  20'000,  24'000,  24'000}, // 200k window
-    {"Heavy",       360'000,  32'000,  32'000,  32'000}, // 400k window
-    {"Very Heavy",  900'000,  64'000,  48'000,  48'000}, //   1M window
-    {"Ultra",     1'800'000, 100'000,  64'000,  64'000}, //   2M window
+    // Each row is a starting point for a model's context window. The trigger
+    // sits at roughly half the window rather than at its edge, so the preserved
+    // tail and a full reply still fit above it; the preserved tail is about a
+    // tenth of the trigger and the summary budget a little larger, enough to
+    // carry tool output and file paths forward. Picking a preset never saves.
+    {"Instant",       16'000,   2'000,   4'000,   4'000}, //  32k window
+    {"Very Light",    32'000,   4'000,   6'000,   6'000}, //  64k window
+    {"Light",         64'000,   8'000,   8'000,  12'000}, // 128k window
+    {"Balanced",      96'000,  12'000,  12'000,  16'000}, // 200k window
+    {"Heavy",        192'000,  20'000,  20'000,  24'000}, // 400k window
+    {"Very Heavy",   384'000,  32'000,  32'000,  32'000}, //   1M window
+    {"Ultra",        768'000,  64'000,  48'000,  48'000}, //   2M window
 };
 
 } // namespace

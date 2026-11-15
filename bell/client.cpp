@@ -28,6 +28,47 @@
 
 
 
+// A stored reasoning payload is only replayable when it carries the provider's
+// opaque `encrypted_content`. That blob is the only part a strict gateway can
+// decode back into the chain of thought, so an item without it is not worth the
+// input tokens: the Responses protocol has nothing to match it against. Models
+// that answer with a readable `summary` only (DeepSeek under this protocol) never
+// produce one, so their rows are kept for display but not replayed.
+//
+// Measured against the current gateway (2026-11-15): it accepts any reasoning
+// item -- empty blob, garbage blob, summary-only, even out of order -- with HTTP
+// 200 instead of rejecting it, and DeepSeek charges zero tokens for it. So this
+// is a correctness/token-hygiene guard, not a crash guard.
+[[nodiscard]] bool payload_has_replayable_reasoning(const std::string& payload) {
+  if (payload.empty()) {
+    return false;
+  }
+
+  boost::system::error_code ec;
+  const boost::json::value parsed = boost::json::parse(payload, ec);
+  if (ec || !parsed.is_object()) {
+    return false;
+  }
+
+  const boost::json::value* items = parsed.as_object().if_contains("reasoning_items");
+  if (items == nullptr || !items->is_array()) {
+    return false;
+  }
+
+  for (const boost::json::value& item : items->as_array()) {
+    if (!item.is_object()) {
+      continue;
+    }
+    const boost::json::value* encrypted =
+      item.as_object().if_contains("encrypted_content");
+    if (encrypted != nullptr && encrypted->is_string() && !encrypted->as_string().empty()) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 [[nodiscard]] boost::json::array build_input(
   const std::vector<felis::bell::shadowed_message>& msgs
 ) {
@@ -93,9 +134,10 @@
         // opaque `encrypted_content` that lets the model resume its own
         // chain-of-thought. Replayed verbatim as `type:"reasoning"` input items;
         // because the row was inserted *before* the output/`function_call` items
-        // it belongs to, they land in the right position. A deepseek-style model
-        // stores no payload, so there is nothing to emit.
-        if (!msg.reasoning_payload_.has_value() || msg.reasoning_payload_->empty()) {
+        // it belongs to, they land in the right position. A summary-only payload
+        // (DeepSeek) is stored for display but must not be sent back.
+        if (!msg.reasoning_payload_.has_value()
+            || !payload_has_replayable_reasoning(*msg.reasoning_payload_)) {
           break;
         }
         boost::system::error_code ec;
@@ -113,6 +155,11 @@
             continue;
           }
           const boost::json::object& object = item.as_object();
+          const boost::json::value* encrypted = object.if_contains("encrypted_content");
+          if (encrypted == nullptr || !encrypted->is_string()
+              || encrypted->as_string().empty()) {
+            continue;
+          }
           if (const boost::json::value* id = object.if_contains("id");
               id != nullptr && id->is_string()) {
             if (!replayed_reasoning_ids.insert(std::string(id->as_string())).second) {
@@ -181,7 +228,7 @@
   for (const felis::bell::shadowed_message& msg : msgs) {
     if (msg.kind_ == felis::bell::message_kind::assistant_reasoning_payload
         && msg.reasoning_payload_.has_value()
-        && !msg.reasoning_payload_->empty()) {
+        && payload_has_replayable_reasoning(*msg.reasoning_payload_)) {
       has_stored_reasoning = true;
       break;
     }
@@ -468,6 +515,13 @@ void felis::bell::client::prompt(
     // Record the summarizer's own usage against the summary it produced, so
     // `context_usage` sees a paired `inline_compact` row and reports "unknown":
     // the pre-summary count must never be read as the new context size.
+    //
+    // one request produces 0 to many message rows.
+    // A tool-only response with no reasoning item appends nothing from the model
+    // at all — there is no row to hang usage on. And a response with three tool calls
+    // appends three rows, so a usage column would either be written three times
+    // (tripling it in any naive sum) or written on one arbitrarily chosen row,
+    // which is a convention nothing enforces.
     if (summarized->usage.reported) {
       db_->record_request_usage(
         summary_id,
@@ -540,7 +594,11 @@ void felis::bell::client::prompt(
     const felis::net::llm::Result& v = *result;
 
     // Measure this request against the turn's opening user message; reported
-    // usage is exactly what the auto-compact predicate reads next round.
+    // usage is exactly what the auto-compact predicate reads next round. This is
+    // one row per request, not a column on a message: the rows appended below may
+    // be none (tool-only reply, no reasoning item) or several (text + N calls), so
+    // no single message owns this measurement. See the `request_usage` schema
+    // comment in `database.cpp` for the full rationale.
     if (v.usage.reported) {
       db_->record_request_usage(
         user_message_id,
@@ -550,12 +608,15 @@ void felis::bell::client::prompt(
 
     // std::cout << std::format("Remote: {}\n", v.text);
 
-    // Persist the reasoning item(s) this response produced (GPT/o-series
-    // `encrypted_content`) so a later request can replay them and the model can
-    // resume its chain-of-thought. Inserted *first*, ahead of this turn's
-    // assistant text and tool calls, so the replayed `reasoning` item lands before
-    // the output/`function_call` items it belongs to. deepseek-style models emit
-    // no reasoning items and store no payload, so this row is skipped for them.
+    // Persist the reasoning item(s) this response produced so a later request can
+    // replay them and the model can resume its chain-of-thought. Inserted *first*,
+    // ahead of this turn's assistant text and tool calls, so the replayed
+    // `reasoning` item lands before the output/`function_call` items it belongs
+    // to. Which models deliver one is a property of the endpoint, not the family:
+    // a Responses-protocol reasoning model may return an item with only an opaque
+    // `encrypted_content` (GPT/o-series) or with a readable `summary`, and this
+    // code stores whichever it received. A model that returns no `reasoning` item
+    // (plain chat-completions output) simply produces no row.
     {
       boost::json::array reasoning_items;
       std::set<std::string> seen_reasoning_ids;

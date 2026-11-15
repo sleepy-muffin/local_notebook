@@ -57,6 +57,19 @@ CREATE INDEX IF NOT EXISTS idx_message_made_at ON message(made_at);
 -- per-request order is `id` order. A summarization request is inferred by pairing
 -- with the `inline_summary` message it produced, so no separate marker state is
 -- needed.
+--
+-- Why a table and not `input_tokens`/`output_tokens` columns on `message`: a
+-- request does not own a message. `client::prompt` appends 0..N message rows per
+-- request -- a reasoning row only when the provider sent a reasoning item, an
+-- `assistant_output` only when the reply text is non-empty, plus one
+-- `assistant_tool_call` and one `tool_result` per call. A tool-only response with
+-- no reasoning item appends no model row at all, so there would be nothing to
+-- attach usage to; and a reply with three tool calls would either write the same
+-- usage on three rows (tripling it in any naive sum) or pick one row by a
+-- convention nothing enforces. On top of that, `input_tokens` measures the whole
+-- prompt, not any single message -- clearest with the summarizer, whose usage
+-- describes the pre-compaction transcript rather than the `inline_compact` row it
+-- is paired with. One row per request is only expressible as its own table.
 CREATE TABLE IF NOT EXISTS request_usage (
   id                INTEGER  PRIMARY KEY AUTOINCREMENT,
   user_message_id   INTEGER  NOT NULL REFERENCES message(id) ON DELETE CASCADE,
