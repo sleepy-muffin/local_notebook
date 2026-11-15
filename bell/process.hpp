@@ -9,8 +9,9 @@
 // Runs one shell command for a tool call, on every platform this project ships.
 //
 // The command is a shell command line, not an argv vector: it is handed to the
-// platform shell (cmd.exe on Windows, /bin/sh elsewhere) exactly as the model
-// wrote it, so pipes, redirection and quoting behave the way a user expects.
+// platform shell (cmd.exe on Windows; bash, or /bin/sh where bash is absent,
+// elsewhere) exactly as the model wrote it, so pipes, redirection and quoting
+// behave the way a user expects.
 // The child runs in its own process group / job object, so a timeout or a
 // cancellation kills the whole tree instead of orphaning grandchildren.
 namespace felis::process
@@ -83,8 +84,9 @@ struct result {
 // from any thread.
 result run(const spec& request);
 
-// The shell run() hands the command to: "cmd.exe" on Windows, "/bin/sh"
-// elsewhere. Exposed so a tool description can name it.
+// The shell run() hands the command to: "cmd.exe" on Windows, "bash
+// (pipefail)" or "sh" elsewhere, whichever was found. Exposed so a tool
+// description can name it.
 std::string shell_name();
 
 } // namespace felis::process

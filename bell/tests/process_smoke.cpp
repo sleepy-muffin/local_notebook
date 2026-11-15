@@ -85,11 +85,13 @@ int main() {
           "credential-looking env vars stripped");
   }
   {
+    // Six 3-byte characters, capped at 8 bytes: the head ends mid-character and
+    // the tail begins mid-character, so both sides must be trimmed.
     felis::process::spec s;
-    s.command = "printf '\\xe4\\xb8'";  // half of a 3-byte character
-    s.max_output_bytes = 2;
+    s.command = "printf '世界世界世界'";
+    s.max_output_bytes = 8;
     auto r = felis::process::run(s);
-    check(r.output.find('\xe4') == std::string::npos, "no broken utf-8 at cut");
+    check(r.output == "世\n… 12 bytes truncated …\n界", "no broken utf-8 at cut");
   }
   {
     felis::process::spec s;

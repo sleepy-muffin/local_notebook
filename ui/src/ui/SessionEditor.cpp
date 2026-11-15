@@ -45,13 +45,18 @@ struct BudgetPreset {
 };
 
 constexpr BudgetPreset kBudgetPresets[] = {
-    {"Instant",      1000,   250,   250,   500},
-    {"Very Light",   2000,   500,  1000,  1000},
-    {"Light",        4000,  1000,  1200,  2000},
-    {"Balanced",    12000,  2000,  4000,  4000},
-    {"Heavy",       24000,  4000,  6000,  8000},
-    {"Very Heavy",  48000,  8000,  8000, 16000},
-    {"Ultra",       64000, 16000, 16000, 32000},
+    // Each row is a model context window, with the trigger set to the 90% mark
+    // Zed uses before compacting, the preserved tail at roughly a tenth of the
+    // window, and a summary budget large enough to carry tool output and file
+    // paths forward. 80k and up is the range Zed considers viable for automatic
+    // compaction at all.
+    {"Instant",       28'800,   4'000,   8'000,   4'000}, //  32k window
+    {"Very Light",    57'600,   6'000,  12'000,   8'000}, //  64k window
+    {"Light",       115'200,  12'000,  16'000,  16'000}, // 128k window
+    {"Balanced",    180'000,  20'000,  24'000,  24'000}, // 200k window
+    {"Heavy",       360'000,  32'000,  32'000,  32'000}, // 400k window
+    {"Very Heavy",  900'000,  64'000,  48'000,  48'000}, //   1M window
+    {"Ultra",     1'800'000, 100'000,  64'000,  64'000}, //   2M window
 };
 
 } // namespace

@@ -30,12 +30,16 @@ struct SummaryPreset {
 };
 
 constexpr SummaryPreset kSummaryPresets[] = {
-    {"Instant", 250, 3000, 500},
-    {"Very Light", 1000, 6000, 1000},
-    {"Light", 2000, 12000, 2000},
-    {"Balanced", 4000, 24000, 4000},
-    {"Heavy", 6000, 48000, 8000},
-    {"Very Heavy", 8000, 96000, 16000},
+    // Tiers follow the same context windows as the session budget presets: the
+    // memory trigger sits well inside the window (Zed compacts at 90%), and the
+    // memory itself is allowed to grow with it so a large window is not spent on
+    // a postcard-sized memory.
+    {"Instant", 1'000, 8'000, 2'000},        //  32k window
+    {"Very Light", 2'000, 16'000, 4'000},    //  64k window
+    {"Light", 4'000, 32'000, 8'000},         // 128k window
+    {"Balanced", 8'000, 96'000, 16'000},     // 200k window
+    {"Heavy", 12'000, 192'000, 32'000},      // 400k window
+    {"Very Heavy", 16'000, 384'000, 48'000}, //   1M window
 };
 
 // The reasoning levels offered for the chat and memory selectors. They are the

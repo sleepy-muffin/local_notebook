@@ -1,5 +1,7 @@
 #include "process.hpp"
 
+#include <felis/log.hpp>
+
 #include <algorithm>
 #include <cctype>
 #include <cerrno>
@@ -93,6 +95,14 @@ inline bool looks_secret(std::string_view name) {
     }
   }
   return false;
+}
+
+// True when the variable names a shell startup file. A non-interactive bash
+// sources $BASH_ENV before the command (sh sources $ENV), which would let a
+// stray file in the user's environment run inside a tool call. Dropped even
+// though the name is not credential-like.
+inline bool looks_shell_startup(std::string_view name) {
+  return name == "BASH_ENV" || name == "ENV";
 }
 
 // Drops a trailing incomplete UTF-8 sequence so a byte-capped cut never leaves
@@ -593,18 +603,44 @@ void close_fd(int& fd) {
   }
 }
 
-// A copy of the environment without credential-looking entries. Built before
-// fork, because after fork only async-signal-safe calls are allowed.
+// A copy of the environment without credential-looking entries. Built
+// before fork, because after fork only async-signal-safe calls are allowed.
 std::vector<std::string> sanitized_environment() {
   std::vector<std::string> entries;
   for (char** cursor = environ; cursor != nullptr && *cursor != nullptr; ++cursor) {
     const std::string_view entry{*cursor};
     const std::size_t equals = entry.find('=');
     if (equals == std::string_view::npos) continue;
-    if (looks_secret(entry.substr(0, equals))) continue;
+    const std::string_view name = entry.substr(0, equals);
+    if (looks_secret(name) || looks_shell_startup(name)) continue;
     entries.emplace_back(entry);
   }
   return entries;
+}
+
+// The shell a command runs under, resolved once on first use.
+//
+// bash is preferred where it exists because `-o pipefail` makes a pipeline
+// report its first failing command; without it `build | tail` exits 0 and the
+// tool hands the model a false success. Where bash is absent (Alpine, BusyBox,
+// BSD) /bin/sh is the POSIX-guaranteed fallback, minus pipefail.
+struct shell_choice {
+  const char* path;   // absolute path, so the child never needs PATH
+  const char* argv0;  // what the command sees as $0
+  bool pipefail;
+};
+
+const shell_choice& posix_shell() {
+  static const shell_choice choice = [] {
+    for (const char* candidate : {"/usr/bin/bash", "/bin/bash"}) {
+      if (::access(candidate, X_OK) == 0) {
+        return shell_choice{candidate, "bash", true};
+      }
+    }
+    felis::log::info("bash not found; commands fall back to /bin/sh without pipefail");
+    return shell_choice{"/bin/sh", "sh", false};
+  }();
+  return choice;
 }
 
 result run_posix(const spec& request) {
@@ -634,6 +670,19 @@ result run_posix(const spec& request) {
     }
     envp.push_back(nullptr);
   }
+
+  // Resolved and built before fork: after fork only async-signal-safe calls are
+  // allowed, and the once-initialised static could allocate.
+  const shell_choice& shell = posix_shell();
+  std::vector<char*> argv;
+  argv.push_back(const_cast<char*>(shell.argv0));
+  if (shell.pipefail) {
+    argv.push_back(const_cast<char*>("-o"));
+    argv.push_back(const_cast<char*>("pipefail"));
+  }
+  argv.push_back(const_cast<char*>("-c"));
+  argv.push_back(const_cast<char*>(request.command.c_str()));
+  argv.push_back(nullptr);
 
   const std::string working_directory =
       request.cwd.empty() ? std::string() : request.cwd.string();
@@ -671,10 +720,9 @@ result run_posix(const spec& request) {
     }
 
     if (!envp.empty()) {
-      ::execle("/bin/sh", "sh", "-c", request.command.c_str(), nullptr, envp.data());
+      ::execve(shell.path, argv.data(), envp.data());
     } else {
-      ::execl("/bin/sh", "sh", "-c", request.command.c_str(),
-              static_cast<char*>(nullptr));
+      ::execv(shell.path, argv.data());
     }
     _exit(127);
   }
@@ -792,7 +840,7 @@ std::string shell_name() {
 #ifdef _WIN32
   return "cmd.exe";
 #else
-  return "/bin/sh";
+  return detail::posix_shell().pipefail ? "bash (pipefail)" : "sh";
 #endif
 }
 

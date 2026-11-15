@@ -10,11 +10,13 @@
 //     -lboost_json -lboost_container -lboost_regex -lboost_url -lssl -lcrypto \
 //     -pthread -o /tmp/tool_command_check
 
+#include "process.hpp"
 #include "tools.hpp"
 
 #include <boost/json.hpp>
 
 #include <cstdio>
+#include <cstdlib>
 #include <stop_token>
 #include <string>
 #include <vector>
@@ -108,6 +110,32 @@ int main() {
     const std::string out = felis::bell::execute_local_tool(
         command_call(R"({"timeout_seconds": 5})"), roots, std::nullopt, with_terminal);
     check(out.find("Missing command") != std::string::npos, "empty command rejected");
+  }
+  {
+    // bash reports the first failing stage; sh reports the last command. Either
+    // is correct as long as it matches the shell the tool advertises.
+    const bool bash = felis::process::shell_name().find("bash") != std::string::npos;
+    std::printf("shell: %s\n", felis::process::shell_name().c_str());
+    const std::string out = felis::bell::execute_local_tool(
+        command_call(R"({"command": "false | true"})"), roots, std::nullopt, with_terminal);
+    check(bash ? out.find("exit code: 1") != std::string::npos
+               : out.find("exit code: 0") != std::string::npos,
+          "pipeline verdict follows the advertised shell");
+  }
+  {
+    // A stray $BASH_ENV must not be sourced inside the command.
+    const char* script = "/tmp/felis_bash_env_probe.sh";
+    if (std::FILE* file = std::fopen(script, "w"); file != nullptr) {
+      std::fputs("echo MARKER-FROM-BASH-ENV\n", file);
+      std::fclose(file);
+    }
+    ::setenv("BASH_ENV", script, 1);
+    const std::string out = felis::bell::execute_local_tool(
+        command_call(R"({"command": "echo body"})"), roots, std::nullopt, with_terminal);
+    check(out.find("MARKER-FROM-BASH-ENV") == std::string::npos &&
+              out.find("body") != std::string::npos,
+          "$BASH_ENV is stripped before exec");
+    ::unsetenv("BASH_ENV");
   }
 
   std::printf("\n%s (%d failure(s))\n", failures == 0 ? "ALL PASSED" : "FAILED", failures);
