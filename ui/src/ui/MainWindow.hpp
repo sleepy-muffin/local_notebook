@@ -65,6 +65,8 @@ private:
 
   void apply_window_style();
   void refresh_sessions();
+  // Moves the sidebar highlight onto the session that is actually displayed.
+  void sync_selection_to_current();
   void open_conversation(std::uint32_t session_id);
   ConversationView* ensure_conversation_view(std::uint32_t session_id);
 

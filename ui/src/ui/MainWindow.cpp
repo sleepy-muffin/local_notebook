@@ -129,6 +129,18 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
     }
   }
 
+  if (event->type() == QEvent::MouseButtonRelease) {
+    auto* mouse = static_cast<QMouseEvent*>(event);
+
+    // Qt moves the selection on press, but `clicked` only fires on release over
+    // a row. A press that is dragged out before release would otherwise leave
+    // the highlight on a session that is not the one on screen, so re-sync it
+    // once this release has been fully handled.
+    if (mouse->button() == Qt::LeftButton) {
+      QTimer::singleShot(0, this, [this]() { sync_selection_to_current(); });
+    }
+  }
+
   return BackgroundWidget::eventFilter(watched, event);
 }
 
@@ -374,12 +386,12 @@ QListView* MainWindow::build_session_list(
       }
   );
 
-  connect(view, &QListView::clicked, this, [this, bound_delegate](const QModelIndex& index) {
+  connect(view, &QListView::clicked, this, [this, bound_model, bound_delegate](const QModelIndex& index) {
     if (bound_delegate->take_action_click()) {
       return;
     }
     if (index.isValid()) {
-      open_conversation(sessions_model_->session_id_at(index.row()));
+      open_conversation(bound_model->session_id_at(index.row()));
     }
   });
 
@@ -633,6 +645,30 @@ ConversationView* MainWindow::ensure_conversation_view(std::uint32_t session_id)
   return view;
 }
 
+void MainWindow::sync_selection_to_current() {
+  if (sessions_view_ == nullptr || pinned_view_ == nullptr) {
+    return;
+  }
+
+  const int pinned_row = pinned_model_->row_for(current_session_);
+
+  if (pinned_row >= 0) {
+    pinned_view_->setCurrentIndex(pinned_model_->index(pinned_row, 0));
+    sessions_view_->clearSelection();
+    return;
+  }
+
+  pinned_view_->clearSelection();
+
+  const int row = sessions_model_->row_for(current_session_);
+
+  if (row >= 0) {
+    sessions_view_->setCurrentIndex(sessions_model_->index(row, 0));
+  } else {
+    sessions_view_->clearSelection();
+  }
+}
+
 void MainWindow::open_conversation(std::uint32_t session_id) {
   ConversationView* view = ensure_conversation_view(session_id);
 
@@ -788,7 +824,17 @@ void MainWindow::update_header() {
   const std::optional<std::uint64_t> usage =
       api_.context_usage(felis::bell::size_type(current_session_));
 
-  if (usage.has_value()) {
+  // Show how far the session is from auto-compaction: current tokens against the
+  // threshold that triggers it. 0 means the session has no threshold yet.
+  if (usage.has_value() && session.has_value()) {
+    const std::uint64_t threshold =
+        static_cast<std::uint64_t>(session->auto_compact_threshold().get());
+    header_time_->setText(
+        trs("%1 / %2 tok")
+            .arg(static_cast<qulonglong>(*usage))
+            .arg(static_cast<qulonglong>(threshold))
+    );
+  } else if (usage.has_value()) {
     header_time_->setText(trs("%1 tok").arg(static_cast<qulonglong>(*usage)));
   } else {
     header_time_->clear();

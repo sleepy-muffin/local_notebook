@@ -560,7 +560,11 @@ private:
   QLabel* time_ = nullptr;
   QLabel* tokens_ = nullptr;
   QLabel* status_ = nullptr;
-  QWidget* row_ = nullptr;
+  // The metadata labels on one side and the action buttons on the other, with a
+  // spacer between them so they sit at opposite ends of the strip.
+  QWidget* meta_row_ = nullptr;
+  QWidget* button_row_ = nullptr;
+  QWidget* spacer_ = nullptr;
   QBoxLayout* outer_ = nullptr;
   QToolButton* copy_ = nullptr;
   QToolButton* edit_ = nullptr;
@@ -571,7 +575,9 @@ private:
   std::uint32_t message_id_ = 0;
   render::Role role_ = render::Role::Assistant;
   bool editable_ = false;
+  bool right_aligned_ = false;
   bool built_ = false;
+  std::u16string time_text_;
   std::u16string status_text_;
 
   std::function<void(std::uint32_t)> on_copy_;
@@ -591,17 +597,12 @@ MessageActionsBar::MessageActionsBar(QWidget* parent) : QWidget(parent) {
   outer_->setContentsMargins(kBodySidePadding, 0, kBodySidePadding, 0);
   outer_->setSpacing(0);
 
-  row_ = new QWidget(this);
-  row_->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+  button_row_ = new QWidget(this);
+  button_row_->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
 
-  auto* row = new QHBoxLayout(row_);
+  auto* row = new QHBoxLayout(button_row_);
   row->setContentsMargins(0, 0, 0, 0);
   row->setSpacing(4);
-
-  id_ = new QLabel(row_);
-  time_ = new QLabel(row_);
-  tokens_ = new QLabel(row_);
-  status_ = new QLabel(row_);
 
   copy_ = make_button(QStringLiteral("copy"), QStyle::SP_DialogSaveButton, trs("Copy message"));
   edit_ = make_button(QStringLiteral("edit"), QStyle::SP_FileIcon, trs("Edit message"));
@@ -611,21 +612,39 @@ MessageActionsBar::MessageActionsBar(QWidget* parent) : QWidget(parent) {
       QStringLiteral("branch"), QStyle::SP_ArrowForward, trs("Branch conversation"));
   remove_ = make_button(QStringLiteral("delete"), QStyle::SP_TrashIcon, trs("Delete message"));
 
-  row->addWidget(id_);
-  row->addWidget(time_);
-  row->addWidget(tokens_);
-  row->addWidget(status_);
   row->addWidget(copy_);
   row->addWidget(edit_);
   row->addWidget(previous_);
   row->addWidget(branch_);
   row->addWidget(remove_);
 
-  // A stretch on either side lets the same widget mirror the old behaviour:
-  // the reader's own messages put the strip on the right, replies on the left.
-  outer_->addStretch(1);
-  outer_->addWidget(row_);
-  outer_->addStretch(0);
+  // The metadata sits on the opposite end of the strip from the buttons: id,
+  // time, tokens and status, all quieter than the message body.
+  meta_row_ = new QWidget(this);
+  meta_row_->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+
+  auto* meta = new QHBoxLayout(meta_row_);
+  meta->setContentsMargins(0, 0, 0, 0);
+  meta->setSpacing(8);
+
+  id_ = new QLabel(meta_row_);
+  time_ = new QLabel(meta_row_);
+  tokens_ = new QLabel(meta_row_);
+  status_ = new QLabel(meta_row_);
+
+  meta->addWidget(id_);
+  meta->addWidget(time_);
+  meta->addWidget(tokens_);
+  meta->addWidget(status_);
+
+  spacer_ = new QWidget(this);
+  spacer_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+
+  // Replies keep the buttons on the left and the metadata on the right; the
+  // reader's own messages mirror it in set_message().
+  outer_->addWidget(button_row_);
+  outer_->addWidget(spacer_, 1);
+  outer_->addWidget(meta_row_);
 
   connect(copy_, &QToolButton::clicked, this, [this]() {
     if (on_copy_) {
@@ -662,7 +681,7 @@ MessageActionsBar::MessageActionsBar(QWidget* parent) : QWidget(parent) {
 
 QToolButton* MessageActionsBar::make_button(
     const QString& icon, QStyle::StandardPixmap fallback, const QString& tip) {
-  auto* button = new QToolButton(row_);
+  auto* button = new QToolButton(button_row_);
   button->setToolButtonStyle(Qt::ToolButtonIconOnly);
   button->setIconSize(QSize(15, 15));
   button->setFixedSize(kActionsHeight, kActionsHeight);
@@ -723,7 +742,7 @@ void MessageActionsBar::apply_style() {
 
 void MessageActionsBar::set_message(const render::MessageMeta& meta) {
   if (built_ && meta.id == message_id_ && meta.role == role_ && meta.editable == editable_ &&
-      meta.status == status_text_) {
+      meta.time == time_text_ && meta.status == status_text_) {
     return;
   }
 
@@ -731,6 +750,7 @@ void MessageActionsBar::set_message(const render::MessageMeta& meta) {
   message_id_ = meta.id;
   role_ = meta.role;
   editable_ = meta.editable;
+  time_text_ = meta.time;
   status_text_ = meta.status;
 
   id_->setText(QStringLiteral("#%1").arg(meta.id));
@@ -754,11 +774,28 @@ void MessageActionsBar::set_message(const render::MessageMeta& meta) {
   remove_->setVisible(true);
 
   const bool right_aligned = meta.role == render::Role::User;
-  outer_->setStretch(0, right_aligned ? 1 : 0);
-  outer_->setStretch(2, right_aligned ? 0 : 1);
-  outer_->invalidate();
 
-  row_->updateGeometry();
+  // Mirror the strip: metadata on the left and buttons on the right for the
+  // reader's own messages, buttons on the left for replies.
+  if (right_aligned != right_aligned_) {
+    right_aligned_ = right_aligned;
+    outer_->removeWidget(button_row_);
+    outer_->removeWidget(meta_row_);
+    outer_->removeWidget(spacer_);
+
+    if (right_aligned) {
+      outer_->addWidget(meta_row_);
+      outer_->addWidget(spacer_, 1);
+      outer_->addWidget(button_row_);
+    } else {
+      outer_->addWidget(button_row_);
+      outer_->addWidget(spacer_, 1);
+      outer_->addWidget(meta_row_);
+    }
+
+    outer_->invalidate();
+  }
+
   updateGeometry();
 }
 

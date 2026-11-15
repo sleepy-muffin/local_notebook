@@ -34,6 +34,7 @@
 #include "support/i18n.hpp"
 #include "ui/MessageDocument.hpp"
 #include "ui/StatusNotice.hpp"
+#include "ui/TimeFormat.hpp"
 #include "ui/TranscriptCanvas.hpp"
 #include "ui/theme.hpp"
 
@@ -558,7 +559,8 @@ void ConversationView::append_rendered_message(
   }
 
   render::MessageMeta meta = make_message_meta(
-      role, message.id_, std::u16string{}, std::u16string{}, editable, to_u16(text));
+      role, message.id_, to_u16(format_message_time(message.made_at_)), std::u16string{},
+      editable, to_u16(text));
 
   std::vector<render::Block> blocks;
 

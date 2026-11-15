@@ -4,11 +4,16 @@
 #include <QComboBox>
 #include <QDialogButtonBox>
 #include <QFormLayout>
+#include <QFrame>
 #include <QHBoxLayout>
+#include <QLabel>
 #include <QLineEdit>
+#include <QListWidget>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QSpinBox>
+#include <QStackedWidget>
 #include <QVBoxLayout>
 
 #include <optional>
@@ -67,87 +72,158 @@ SessionEditor::SessionEditor(
     : QDialog(parent), api_(api), session_id_(session_id) {
   setObjectName(QStringLiteral("SessionEditor"));
   setWindowTitle(session_id == 0 ? trs("New Session") : trs("Edit Session"));
-  resize(560, 640);
+  resize(760, 620);
+  setMinimumSize(600, 440);
 
-  auto* layout = new QVBoxLayout(this);
-  layout->setContentsMargins(20, 20, 20, 20);
-  layout->setSpacing(12);
+  auto* root = new QHBoxLayout(this);
+  root->setContentsMargins(0, 0, 0, 0);
+  root->setSpacing(0);
 
-  auto* form = form_layout(this);
+  nav_ = new QListWidget(this);
+  nav_->setObjectName(QStringLiteral("SessionNav"));
+  nav_->setFixedWidth(180);
+  nav_->setFrameShape(QFrame::NoFrame);
+  nav_->addItem(trs("Common"));
+  nav_->addItem(trs("Custom Instructions"));
+  nav_->addItem(trs("Tools"));
+  style_navigation_rail(nav_);
+  root->addWidget(nav_);
+  root->addWidget(v_separator(this));
 
-  title_ = new QLineEdit(this);
-  title_->setPlaceholderText(trs("Session title"));
+  auto* right = new QVBoxLayout();
+  right->setContentsMargins(0, 0, 0, 16);
+  right->setSpacing(0);
 
-  instructions_ = new PlainTextEdit(this);
-  instructions_->setPlaceholderText(trs("Custom instructions for this session"));
-  instructions_->setMinimumHeight(96);
+  stack_ = new QStackedWidget(this);
+  stack_->setObjectName(QStringLiteral("SessionStack"));
+  stack_->setFrameShape(QFrame::NoFrame);
+  stack_->addWidget(build_common_tab());
+  stack_->addWidget(build_instructions_tab());
+  stack_->addWidget(build_tools_tab());
+  right->addWidget(stack_, 1);
 
-  shared_directories_ = new PlainTextEdit(this);
-  shared_directories_->setPlaceholderText(trs("One directory per line"));
-  shared_directories_->setMinimumHeight(72);
+  auto* buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, this);
+  buttons->button(QDialogButtonBox::Save)->setObjectName(QStringLiteral("Primary"));
+  buttons->button(QDialogButtonBox::Cancel)->setObjectName(QStringLiteral("Secondary"));
+  connect(buttons, &QDialogButtonBox::accepted, this, [this]() { save_session(); });
+  connect(buttons, &QDialogButtonBox::rejected, this, [this]() { reject(); });
 
-  form->addRow(field_label(this, trs("Title")), title_);
-  form->addRow(field_label(this, trs("Instructions")), instructions_);
-  form->addRow(field_label(this, trs("Shared directories")), shared_directories_);
+  auto* footer = new QHBoxLayout();
+  footer->setContentsMargins(20, 0, 20, 0);
+  footer->setSpacing(8);
+  footer->addStretch(1);
+  footer->addWidget(buttons);
+  right->addLayout(footer);
 
-  reasoning_ = new ComboBox(this);
-  reasoning_->setEditable(true);
-  reasoning_->addItems({QStringLiteral("none"), QStringLiteral("low"), QStringLiteral("medium"),
-                        QStringLiteral("high")});
-  form->addRow(field_label(this, trs("Reasoning")), reasoning_);
+  root->addLayout(right, 1);
 
-  // The reasoning level used when this session's inline summary is regenerated.
-  // It is separate from the chat's `Reasoning` above so a reasoning model can
-  // summarise at a lower effort (usually "none") and still emit visible text.
-  summary_reasoning_ = new ComboBox(this);
-  summary_reasoning_->setEditable(true);
-  summary_reasoning_->addItems({QStringLiteral("none"), QStringLiteral("low"),
-                                QStringLiteral("medium"), QStringLiteral("high")});
-  summary_reasoning_->setToolTip(trs(
-      "The reasoning level used when this session's summary is updated. "
-      "Chat turns are unaffected."
-  ));
-  form->addRow(field_label(this, trs("Summarization reasoning")), summary_reasoning_);
+  connect(nav_, &QListWidget::currentRowChanged, this, [this](int row) {
+    if (row >= 0) {
+      stack_->setCurrentIndex(row);
+    }
+  });
+  nav_->setCurrentRow(0);
 
-  layout->addLayout(form);
+  setStyleSheet(dialog_stylesheet(QStringLiteral("SessionEditor")));
 
-  // Tool permissions.
-  layout->addWidget(section_label(this, trs("Tools")));
-  {
-    auto* tools_form = form_layout(this);
-    online_tools_ = new QCheckBox(trs("Online (web search)"), this);
-    read_tools_ = new QCheckBox(trs("Read files"), this);
-    write_tools_ = new QCheckBox(trs("Write files"), this);
-    bash_tools_ = new QCheckBox(trs("Run commands"), this);
-    tools_form->addRow(QString(), online_tools_);
-    tools_form->addRow(QString(), read_tools_);
-    tools_form->addRow(QString(), write_tools_);
-    tools_form->addRow(QString(), bash_tools_);
-    layout->addLayout(tools_form);
+  load_session();
+}
+
+QWidget* SessionEditor::page(
+    const QString& title, const QString& subtitle, QWidget* content) {
+  auto* page = new QWidget(this);
+  auto* layout = new QVBoxLayout(page);
+  layout->setContentsMargins(20, 14, 20, 14);
+  layout->setSpacing(10);
+
+  auto* heading = new QLabel(title, page);
+  heading->setObjectName(QStringLiteral("PageTitle"));
+  layout->addWidget(heading);
+
+  if (!subtitle.isEmpty()) {
+    auto* sub = new QLabel(subtitle, page);
+    sub->setObjectName(QStringLiteral("PageSubtitle"));
+    sub->setWordWrap(true);
+    layout->addWidget(sub);
   }
 
-  // Budgets.
-  layout->addWidget(section_label(this, trs("Budgets")));
+  layout->addWidget(content, 1);
+  return page;
+}
+
+QWidget* SessionEditor::scrolled_tab(QWidget* content) {
+  auto* scroll = new QScrollArea(this);
+  scroll->setWidgetResizable(true);
+  scroll->setFrameShape(QFrame::NoFrame);
+  scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+  scroll->setWidget(content);
+  return scroll;
+}
+
+QWidget* SessionEditor::build_common_tab() {
+  auto* content = new QWidget();
+  auto* layout = new QVBoxLayout(content);
+  layout->setContentsMargins(0, 0, 12, 0);
+  layout->setSpacing(12);
+
+  // ---- Session ----
+  layout->addWidget(section_label(content, trs("Session")));
   {
-    auto* budget_form = form_layout(this);
-    threshold_ = make_spin(this, 16000);
+    auto* form = form_layout(content);
+
+    title_ = new QLineEdit(content);
+    title_->setPlaceholderText(trs("Session title"));
+
+    reasoning_ = new ComboBox(content);
+    reasoning_->setEditable(true);
+    reasoning_->addItems({QStringLiteral("none"), QStringLiteral("low"),
+                          QStringLiteral("medium"), QStringLiteral("high")});
+    reasoning_->setToolTip(trs("The reasoning level this session requests for chat turns."));
+
+    // The reasoning level used when this session's inline summary is regenerated.
+    // It is separate from the chat's `Reasoning` above so a reasoning model can
+    // summarise at a lower effort (usually "none") and still emit visible text.
+    summary_reasoning_ = new ComboBox(content);
+    summary_reasoning_->setEditable(true);
+    summary_reasoning_->addItems({QStringLiteral("none"), QStringLiteral("low"),
+                                  QStringLiteral("medium"), QStringLiteral("high")});
+    summary_reasoning_->setToolTip(trs(
+        "The reasoning level used when this session's summary is updated. "
+        "Chat turns are unaffected."
+    ));
+
+    form->addRow(field_label(content, trs("Title")), title_);
+    form->addRow(field_label(content, trs("Reasoning")), reasoning_);
+    form->addRow(field_label(content, trs("Summarization reasoning")), summary_reasoning_);
+
+    layout->addLayout(form);
+  }
+
+  layout->addWidget(h_separator(content));
+
+  // ---- Budgets ----
+  layout->addWidget(section_label(content, trs("Budgets")));
+  {
+    auto* form = form_layout(content);
+
+    threshold_ = make_spin(content, 16000);
     threshold_->setRange(1, 2'000'000'000);
-    preserve_ = make_spin(this, 4000);
+    preserve_ = make_spin(content, 4000);
     preserve_->setRange(1, 2'000'000'000);
-    compact_budget_ = make_spin(this, 4000);
+    compact_budget_ = make_spin(content, 4000);
     compact_budget_->setRange(1, 2'000'000'000);
-    response_budget_ = make_spin(this, 8000);
+    response_budget_ = make_spin(content, 8000);
     response_budget_->setRange(1, 2'000'000'000);
 
-    budget_form->addRow(field_label(this, trs("Compact threshold")), threshold_);
-    budget_form->addRow(field_label(this, trs("Preserve tail")), preserve_);
-    budget_form->addRow(field_label(this, trs("Summary budget")), compact_budget_);
-    budget_form->addRow(field_label(this, trs("Response budget")), response_budget_);
+    form->addRow(field_label(content, trs("Compact threshold")), threshold_);
+    form->addRow(field_label(content, trs("Preserve tail")), preserve_);
+    form->addRow(field_label(content, trs("Summary budget")), compact_budget_);
+    form->addRow(field_label(content, trs("Response budget")), response_budget_);
 
     // A "Preset" row above the numbers: picking one fills the fields below with
     // a starting point for a given load tier. It never saves on its own, so the
     // values can still be tweaked before Save.
-    budget_preset_ = new ComboBox(this);
+    budget_preset_ = new ComboBox(content);
     budget_preset_->addItem(trs("Apply a preset..."));
     for (const BudgetPreset& preset: kBudgetPresets) {
       budget_preset_->addItem(trs(preset.name));
@@ -171,25 +247,81 @@ SessionEditor::SessionEditor(
     );
     auto* preset_row = new QHBoxLayout();
     preset_row->setSpacing(8);
-    preset_row->addWidget(field_label(this, trs("Preset")));
+    preset_row->addWidget(field_label(content, trs("Preset")));
     preset_row->addWidget(budget_preset_, 1);
 
     layout->addLayout(preset_row);
-    layout->addLayout(budget_form);
+    layout->addLayout(form);
   }
 
   layout->addStretch(1);
 
-  auto* buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, this);
-  buttons->button(QDialogButtonBox::Save)->setObjectName(QStringLiteral("Primary"));
-  buttons->button(QDialogButtonBox::Cancel)->setObjectName(QStringLiteral("Secondary"));
-  connect(buttons, &QDialogButtonBox::accepted, this, [this]() { save_session(); });
-  connect(buttons, &QDialogButtonBox::rejected, this, [this]() { reject(); });
-  layout->addWidget(buttons);
+  return page(
+      trs("Common"),
+      trs("Title, reasoning and the budgets this session runs with."),
+      scrolled_tab(content));
+}
 
-  setStyleSheet(dialog_stylesheet(QStringLiteral("SessionEditor")));
+QWidget* SessionEditor::build_instructions_tab() {
+  // The instruction box is the page: it fills the whole right pane instead of
+  // sitting in a form so a long set of instructions stays readable.
+  instructions_ = new QPlainTextEdit();
+  instructions_->setTabChangesFocus(true);
+  instructions_->setPlaceholderText(trs(
+      "Custom instructions for this session. Kept separate from the generated "
+      "summary; never overwritten by it."
+  ));
 
-  load_session();
+  return page(
+      trs("Custom Instructions"),
+      trs("Extra guidance sent with every turn of this session."), instructions_);
+}
+
+QWidget* SessionEditor::build_tools_tab() {
+  auto* content = new QWidget();
+  auto* layout = new QVBoxLayout(content);
+  layout->setContentsMargins(0, 0, 12, 0);
+  layout->setSpacing(12);
+
+  // ---- Shared directories ----
+  layout->addWidget(section_label(content, trs("Shared directories")));
+  {
+    auto* hint = new QLabel(
+        trs("One directory per line. They are mounted into the session's tools."),
+        content);
+    hint->setObjectName(QStringLiteral("PageSubtitle"));
+    hint->setWordWrap(true);
+    layout->addWidget(hint);
+
+    shared_directories_ = new PlainTextEdit(content);
+    shared_directories_->setPlaceholderText(trs("One directory per line"));
+    shared_directories_->setMinimumHeight(120);
+    layout->addWidget(shared_directories_);
+  }
+
+  layout->addWidget(h_separator(content));
+
+  // ---- Tool permissions ----
+  layout->addWidget(section_label(content, trs("Tools")));
+  {
+    auto* form = form_layout(content);
+    online_tools_ = new QCheckBox(trs("Online (web search)"), content);
+    read_tools_ = new QCheckBox(trs("Read files"), content);
+    write_tools_ = new QCheckBox(trs("Write files"), content);
+    bash_tools_ = new QCheckBox(trs("Run commands"), content);
+    form->addRow(QString(), online_tools_);
+    form->addRow(QString(), read_tools_);
+    form->addRow(QString(), write_tools_);
+    form->addRow(QString(), bash_tools_);
+    layout->addLayout(form);
+  }
+
+  layout->addStretch(1);
+
+  return page(
+      trs("Tools"),
+      trs("Directories this session can read and the tools it may use."),
+      scrolled_tab(content));
 }
 
 void SessionEditor::load_session() {

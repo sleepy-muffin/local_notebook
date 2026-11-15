@@ -26,10 +26,10 @@ struct shadowed_message{
 
   message_kind kind_;
 
-
   // ISO-8601 UTC; sortable, so sessions can be
-  // interleaved by time for assistant memory
-  // std::string made_at_;
+  // interleaved by time for assistant memory. Empty for a message that has not
+  // been stored yet.
+  std::string made_at_;
 
   std::optional<tool_call_info> tool_call_;
 

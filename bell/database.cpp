@@ -157,6 +157,7 @@ felis::bell::shadowed_message felis::bell::database::read_shadowed_message(const
     static_cast<message_kind>(stmt.column_int(5))
   );
   message.session_id_ = stmt.column_uint32(1);
+  message.made_at_ = stmt.column_text(3);
   message.reasoning_payload_ = stmt.column_text_opt(8);
 
   const std::string tool_call_id = stmt.column_text(6);

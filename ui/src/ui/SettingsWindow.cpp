@@ -88,6 +88,7 @@ SettingsWindow::SettingsWindow(
   nav_->addItem(trs("Metrics"));
   nav_->addItem(trs("Assistant"));
   nav_->addItem(trs("About"));
+  style_navigation_rail(nav_);
   root->addWidget(nav_);
 
   auto* right = new QVBoxLayout();

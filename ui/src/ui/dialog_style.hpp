@@ -9,6 +9,8 @@
 #include <QFont>
 #include <QFormLayout>
 #include <QLabel>
+#include <QListWidget>
+#include <QListWidgetItem>
 #include <QSizePolicy>
 #include <QSpinBox>
 #include <QString>
@@ -196,6 +198,23 @@ inline QLabel* field_label(QWidget* parent, const QString& text) {
   label->setObjectName(QStringLiteral("FieldLabel"));
   label->setWordWrap(true);
   return label;
+}
+
+// Gives a dialog's navigation rail the same comfortable row height as the rest
+// of the chrome. The item padding in dialog_stylesheet() alone leaves the rows
+// as short as the text, which reads as tiny next to the pages they select; this
+// pins a row height derived from the font so it also scales with the UI size.
+inline void style_navigation_rail(QListWidget* nav) {
+  nav->setFont(ui_font());
+  nav->setSpacing(2);
+
+  const int row_height = nav->fontMetrics().height() + 16;
+
+  for (int row = 0; row < nav->count(); ++row) {
+    if (QListWidgetItem* item = nav->item(row)) {
+      item->setSizeHint(QSize(0, row_height));
+    }
+  }
 }
 
 inline QFormLayout* form_layout(QWidget* parent) {

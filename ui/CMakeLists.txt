@@ -34,6 +34,7 @@ set(LOCAL_NOTEBOOK_UI_SOURCES
         src/ui/SessionListModel.cpp
         src/ui/SettingsWindow.cpp
         src/ui/StatusNotice.cpp
+        src/ui/TimeFormat.cpp
         src/ui/TranscriptCanvas.cpp
         src/ui/theme.cpp
 )
