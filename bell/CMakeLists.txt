@@ -8,10 +8,8 @@ add_library(${PROJECT_NAME} STATIC
     message.cpp
     local_tools.cpp
     client.cpp
-    process.cpp
     store.cpp
     tools.cpp
-    process.cpp
     web_tools.cpp
 )
 

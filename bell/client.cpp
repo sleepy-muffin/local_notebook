@@ -186,12 +186,20 @@
   const std::vector<felis::bell::shadowed_message>& msgs,
   const std::string& model,
   const std::string& reasoning_effort,
-  const felis::bell::tool_capabilities capabilities
+  const felis::bell::tool_capabilities capabilities,
+  std::size_t max_output_tokens
 ) {
   boost::json::object payload;
   payload["model"] = model;
   payload["input"] = build_input(msgs);
   payload["stream"] = true;
+
+  // The session's response budget caps how many tokens the model may produce for
+  // this request. Without it the provider falls back to its own default, which
+  // silently ignores the number the session editor shows. 0 disables the cap.
+  if (max_output_tokens > 0) {
+    payload["max_output_tokens"] = static_cast<std::int64_t>(max_output_tokens);
+  }
 
   payload["tools"] = responses_tools(capabilities);
 
@@ -412,6 +420,15 @@
       {"Content-Type", "application/json"},
       {"Accept", "text/event-stream"},
   };
+
+  // The assistant's authentication token was collected by the form and persisted
+  // to the settings file, but never reached the wire: every request went out
+  // unauthenticated, which only worked while a proxy injected its own key or the
+  // endpoint needed none. Omit the header when the field is empty so keyless
+  // local endpoints are not handed a bogus `Bearer `.
+  if (!ass.authentication_token_.empty()) {
+    headers.push_back({"Authorization", "Bearer " + ass.authentication_token_});
+  }
 
   auto result = felis::net::llm::stream_request(
     felis::net::llm::Protocol::Responses,
@@ -644,7 +661,8 @@ void felis::bell::client::prompt(
       msgs,
       assistant_snapshot.model_,
       sess.reasoning_effort(),
-      caps);
+      caps,
+      sess.response_budget().get());
 
     // Signal the start of this assistant message *before* any of its deltas. A
     // single turn runs one model call per tool-loop iteration, and each call

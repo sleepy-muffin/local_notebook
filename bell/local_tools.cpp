@@ -13,12 +13,12 @@
 #include <felis/str.hpp>
 #include <felis/file/file.hpp>
 #include <felis/file/search.hpp>
+#include <felis/file/process.hpp>
 
 #include <felis/net/llm.hpp>
 
 #include "tools.hpp"
 #include "message.hpp"
-#include "process.hpp"
 #include "web_tools.hpp"
 
 
