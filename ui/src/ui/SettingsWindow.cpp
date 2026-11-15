@@ -14,6 +14,7 @@
 #include <QShowEvent>
 #include <QSpinBox>
 #include <QStackedWidget>
+#include <QTimer>
 #include <QVBoxLayout>
 
 #include <string>
@@ -70,9 +71,10 @@ std::string stored_family(const FontComboBox* box, const std::string& original) 
 } // namespace
 
 SettingsWindow::SettingsWindow(
-    felis::bell::client& api, lnb::Settings& settings, QWidget* parent
+    felis::bell::client& api, lnb::Settings& settings,
+    felis::async::multi_executor<void()>& executor, QWidget* parent
 )
-    : QDialog(parent), api_(api), settings_(settings) {
+    : QDialog(parent), api_(api), settings_(settings), executor_(executor) {
   setObjectName(QStringLiteral("SettingsWindow"));
   setWindowTitle(trs("Settings"));
   resize(760, 620);
@@ -118,7 +120,19 @@ SettingsWindow::SettingsWindow(
   });
   nav_->setCurrentRow(0);
 
+  // Polls the memory-update worker's tiny result record. It runs only while an
+  // update is in flight (started and stopped below), never a permanent tick.
+  memory_poll_ = new QTimer(this);
+  memory_poll_->setInterval(120);
+  connect(memory_poll_, &QTimer::timeout, this, [this]() { poll_memory_update(); });
+
   apply_style();
+}
+
+SettingsWindow::~SettingsWindow() {
+  // Ask a running merge to wind down; never wait for it on the GUI thread. The
+  // worker already holds the shared state, so a late result is simply dropped.
+  memory_handle_.request_stop();
 }
 
 QWidget* SettingsWindow::make_page(
@@ -370,6 +384,32 @@ QWidget* SettingsWindow::build_assistant_page() {
   assistant_memory_ = new PlainTextEdit(content);
   assistant_memory_->setMinimumHeight(120);
   layout->addWidget(assistant_memory_);
+
+  auto* actions = new QHBoxLayout();
+  actions->setSpacing(8);
+
+  update_memory_ = new QPushButton(trs("Update memory now"), content);
+  update_memory_->setObjectName(QStringLiteral("Secondary"));
+  connect(update_memory_, &QPushButton::clicked, this, [this]() { start_memory_update(); });
+  actions->addWidget(update_memory_);
+
+  memory_status_ = new QLabel(content);
+  memory_status_->setWordWrap(true);
+  actions->addWidget(memory_status_, 1);
+  layout->addLayout(actions);
+
+  auto* help = new QLabel(trs(
+      "<b>How assistant memory works</b><br>This memory is shared across every "
+      "session of the assistant, and it is only rewritten when you ask. "
+      "<b>Update memory now</b> merges it with each session's newest summary "
+      "(bounded by <i>Session pool</i>) and with the newest messages across all "
+      "sessions (bounded by <i>Recent messages pool</i>). The result is capped by "
+      "<i>Memory budget</i>. Older conversation may therefore be forgotten. "
+      "Running it again with no new conversation changes nothing. Custom "
+      "instructions are kept separate and are never touched."), content);
+  help->setWordWrap(true);
+  layout->addWidget(help);
+
   layout->addStretch(1);
 
   return make_page(
@@ -516,6 +556,81 @@ void SettingsWindow::save() {
   }
 
   accept();
+}
+
+void SettingsWindow::start_memory_update() {
+  if (memory_state_ != nullptr) {
+    return;  // already running
+  }
+
+  const std::shared_ptr<memory_update_state> state = std::make_shared<memory_update_state>();
+  memory_state_ = state;
+
+  if (update_memory_ != nullptr) {
+    update_memory_->setEnabled(false);
+  }
+  if (memory_status_ != nullptr) {
+    memory_status_->setText(trs("Updating memory..."));
+  }
+
+  // Capture the application-owned client, not `this`: the worker outlives the
+  // window and must never dereference it.
+  felis::bell::client* api = &api_;
+  memory_handle_ = executor_.spawn([api, state](std::stop_token stop) {
+    felis::bell::prompt_events events;
+    events.on_done = [state](bool ok, std::string_view message) {
+      std::scoped_lock lock(state->mutex);
+      state->ok = ok;
+      state->message = std::string(message);
+      state->done = true;
+    };
+    api->update_memory(stop, events);
+  });
+
+  if (memory_poll_ != nullptr) {
+    memory_poll_->start();
+  }
+}
+
+void SettingsWindow::poll_memory_update() {
+  const std::shared_ptr<memory_update_state> state = memory_state_;
+  if (state == nullptr) {
+    return;
+  }
+
+  bool ok = false;
+  std::string message;
+  {
+    std::scoped_lock lock(state->mutex);
+    if (!state->done) {
+      return;
+    }
+    ok = state->ok;
+    message = state->message;
+  }
+
+  memory_state_.reset();
+  if (memory_poll_ != nullptr) {
+    memory_poll_->stop();
+  }
+  if (update_memory_ != nullptr) {
+    update_memory_->setEnabled(true);
+  }
+
+  if (ok) {
+    // The merge already wrote the assistant; show the new text so pressing Save
+    // afterwards does not write a stale copy back over it.
+    if (assistant_memory_ != nullptr) {
+      assistant_memory_->setPlainText(to_qstring(api_.current_assistant().memory_));
+    }
+    if (memory_status_ != nullptr) {
+      memory_status_->setText(trs("Memory updated."));
+      memory_status_->setToolTip(QString());
+    }
+  } else if (memory_status_ != nullptr) {
+    memory_status_->setText(trs("Memory Update Failed"));
+    memory_status_->setToolTip(to_qstring(message));
+  }
 }
 
 } // namespace ui

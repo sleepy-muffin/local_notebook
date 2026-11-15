@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <optional>
 #include <string_view>
@@ -208,12 +209,33 @@ public:
   // (request -> persist reply -> run any tools) until the model returns no tool
   // call. Auto-compaction runs at the head of each iteration. The whole turn
   // streams through `events`; it blocks the calling thread, so run it on a worker.
+  //
+  // `drain_steering` (optional) is how a prompt typed while the turn is running
+  // joins it: the caller persists that prompt on its own thread and then arms a
+  // flag this callback consumes, returning the newest steered message id (0 when
+  // nothing is pending). It is called on the worker thread when the model stops
+  // calling tools; an id newer than anything in the request just sent means the
+  // steer missed that request and the loop must run once more. No text crosses
+  // this boundary — the database is the channel, and `request_messages` re-reads
+  // it every iteration.
   void prompt(
     std::stop_token stop,
     size_type session_id,
     size_type user_message_id,
-    const prompt_events& events
+    const prompt_events& events,
+    const std::function<std::uint32_t()>& drain_steering = {}
   );
+
+  // Merges the assistant's memory from two pools: each standard session's newest
+  // summary (`memory_budget_for_session_compact_`) and the newest conversation
+  // rows across those sessions (`memory_budget_across_messages_`). The reply is
+  // capped by `memory_budget_` and written straight back to the assistant.
+  //
+  // Deliberately separate from `prompt`: this is manual and assistant-wide, never
+  // auto-triggered, and it is not part of any session's turn. It blocks the
+  // calling thread, so run it on a worker. Returns false when both pools are
+  // empty or the request produced no usable text; the memory is left untouched.
+  bool update_memory(std::stop_token stop, const prompt_events& events);
 
 private:
   store store_;

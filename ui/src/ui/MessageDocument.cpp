@@ -386,13 +386,14 @@ render::Block block_from_qtext(const QTextBlock& block) {
 } // namespace
 
 render::MessageMeta make_message_meta(
-    render::Role role, std::uint32_t id, std::u16string time, std::u16string tokens, bool editable,
-    std::u16string raw) {
+    render::Role role, std::uint32_t id, std::u16string time, std::u16string tokens,
+    std::u16string status, bool editable, std::u16string raw) {
   render::MessageMeta meta;
   meta.role = role;
   meta.id = id;
   meta.time = std::move(time);
   meta.tokens = std::move(tokens);
+  meta.status = std::move(status);
   meta.editable = editable;
   meta.raw = std::move(raw);
   return meta;

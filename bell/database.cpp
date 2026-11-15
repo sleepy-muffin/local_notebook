@@ -9,6 +9,7 @@
 #include <vector>
 
 #include <felis/json.hpp>
+#include <felis/str.hpp>
 
 namespace {
 
@@ -91,6 +92,13 @@ constexpr std::string_view MESSAGE_COLUMNS =
   "id, session_id, content, made_at, compacted_at, kind, tool_call_id, "
   "tool_name, reasoning_payload";
 
+// Same columns in the same order, qualified for queries that join `session` and
+// therefore need an alias. Keep the two lists in step: `read_shadowed_message`
+// reads them by position.
+constexpr std::string_view MESSAGE_COLUMNS_QUALIFIED =
+  "m.id, m.session_id, m.content, m.made_at, m.compacted_at, m.kind, "
+  "m.tool_call_id, m.tool_name, m.reasoning_payload";
+
 // Shared directories are stored as a JSON array in one column. A row written
 // before the list existed holds a single plain path, which is still accepted.
 std::string encode_shared_directories(const std::vector<std::string>& directories) {
@@ -171,6 +179,7 @@ felis::bell::shadowed_message felis::bell::database::read_shadowed_message(const
   );
   message.session_id_ = stmt.column_uint32(1);
   message.made_at_ = stmt.column_text(3);
+  message.compacted_at_ = stmt.column_uint32(4);
   message.reasoning_payload_ = stmt.column_text_opt(8);
 
   const std::string tool_call_id = stmt.column_text(6);
@@ -511,6 +520,91 @@ std::vector<felis::bell::shadowed_message> felis::bell::database::recent_message
   while (stmt.step()) {
     messages.push_back(read_shadowed_message(stmt));
   }
+  std::reverse(messages.begin(), messages.end());
+  return messages;
+}
+
+std::vector<felis::bell::session_summary> felis::bell::database::session_summaries(
+  std::size_t token_budget
+) const {
+  // The correlated `MAX(id)` picks each session's newest summary. That is also
+  // the only one still live: summarising a session folds the previous summary
+  // into the new one, so older summaries carry a non-zero `compacted_at`. Picking
+  // by id avoids relying on that, and survives an orphaned compaction.
+  auto stmt = connection_.prepare(
+    "SELECT m.session_id, s.title, m.content "
+    "FROM message m JOIN session s ON s.id = m.session_id "
+    "WHERE s.kind = ? AND m.kind = ? AND m.id = ("
+    "  SELECT MAX(newer.id) FROM message newer "
+    "  WHERE newer.session_id = m.session_id AND newer.kind = ?"
+    ") ORDER BY m.id DESC"
+  );
+  // All three placeholders in one `bind(...)`: a second call restarts the
+  // parameter counter, which would silently leave `?2`/`?3` NULL.
+  stmt.bind(
+    static_cast<int>(session_kind::standard),
+    static_cast<int>(message_kind::inline_compact),
+    static_cast<int>(message_kind::inline_compact));
+
+  std::vector<session_summary> summaries;
+  std::size_t used_tokens = 0;
+
+  while (stmt.step()) {
+    session_summary summary{
+      size_type(stmt.column_uint32(0)), stmt.column_text(1), stmt.column_text(2)
+    };
+
+    const std::size_t cost = felis::str::estimate_tokens(summary.text_);
+    // Never return an empty pool: the newest summary is always offered, even when
+    // it alone overruns the budget, so one long session cannot silently erase
+    // every session from the merge.
+    if (!summaries.empty() && used_tokens + cost > token_budget) {
+      break;
+    }
+
+    used_tokens += cost;
+    summaries.push_back(std::move(summary));
+  }
+
+  return summaries;
+}
+
+std::vector<felis::bell::shadowed_message> felis::bell::database::messages_across_sessions(
+  std::size_t token_budget
+) const {
+  // Same visibility rule as `all_not_compacted_messages` (see the comment there),
+  // applied across every standard session: a row is visible when it was never
+  // compacted, or when the summary that absorbed it is gone. Messages beyond the
+  // budget are dropped from the oldest end, so the cut is on a whole message.
+  auto stmt = connection_.prepare(
+    "SELECT " + std::string(MESSAGE_COLUMNS_QUALIFIED) +
+    " FROM message m JOIN session s ON s.id = m.session_id "
+    "WHERE s.kind = ? AND m.kind IN (?, ?) AND (m.compacted_at = 0 OR "
+    "m.compacted_at NOT IN (SELECT id FROM message WHERE session_id = m.session_id)) "
+    "ORDER BY m.id DESC"
+  );
+  stmt.bind(
+    static_cast<int>(session_kind::standard),
+    static_cast<int>(message_kind::user_prompt),
+    static_cast<int>(message_kind::assistant_output));
+
+  std::vector<shadowed_message> messages;
+  std::size_t used_tokens = 0;
+
+  while (stmt.step()) {
+    shadowed_message message = read_shadowed_message(stmt);
+
+    const std::size_t cost = felis::str::estimate_tokens(message.content_);
+    if (!messages.empty() && used_tokens + cost > token_budget) {
+      break;
+    }
+
+    used_tokens += cost;
+    messages.push_back(std::move(message));
+  }
+
+  // Queried newest first so the budget keeps the newest rows; the request needs
+  // them in conversation order.
   std::reverse(messages.begin(), messages.end());
   return messages;
 }

@@ -558,8 +558,19 @@ void ConversationView::append_rendered_message(
       return;
   }
 
+  // A row absorbed by an inline summary carries that summary's id, shown beside
+  // the message id in the hover strip so the folded-away rows still say where
+  // they went. A prompt steered into a running turn says so instead, since it
+  // was answered without the user ever pressing send for a new turn.
+  std::u16string status;
+  if (message.compacted_at_ != 0) {
+    status = to_u16(trs("Compacted into #%1").arg(message.compacted_at_));
+  } else if (steered_ids_.find(message.id_) != steered_ids_.end()) {
+    status = to_u16(trs("Steered"));
+  }
+
   render::MessageMeta meta = make_message_meta(
-      role, message.id_, to_u16(format_message_time(message.made_at_)), std::u16string{},
+      role, message.id_, to_u16(format_message_time(message.made_at_)), std::u16string{}, status,
       editable, to_u16(text));
 
   std::vector<render::Block> blocks;
@@ -662,16 +673,18 @@ void ConversationView::set_failure_notice_handler(std::function<void()> handler)
 }
 
 void ConversationView::set_busy(bool busy) {
-  if (send_button_ != nullptr) {
-    send_button_->setEnabled(!busy);
-  }
-
+  // The send button stays live while a turn runs: pressing it steers that turn
+  // instead of starting a new one.
   if (busy_ == busy) {
     return;
   }
 
   busy_ = busy;
   cancel_button_->setVisible(busy);
+
+  if (send_button_ != nullptr) {
+    send_button_->setToolTip(busy_ ? trs("Steer the running turn") : trs("Send"));
+  }
 
   if (busy && notice_ != nullptr) {
     notice_->setVisible(false);
@@ -761,7 +774,7 @@ void ConversationView::apply_composer_icons() {
     }
 
     send_button_->setIcon(icon);
-    send_button_->setToolTip(trs("Send"));
+    send_button_->setToolTip(busy_ ? trs("Steer the running turn") : trs("Send"));
   }
 
   if (expand_button_ != nullptr) {
@@ -805,10 +818,6 @@ void ConversationView::toggle_composer_height() {
 }
 
 void ConversationView::submit() {
-  if (controller_.busy()) {
-    return;
-  }
-
   const QString text = input_->toPlainText().trimmed();
 
   if (text.isEmpty()) {
@@ -817,8 +826,53 @@ void ConversationView::submit() {
 
   transcript_->scroll_to_bottom();
 
+  if (controller_.busy()) {
+    steer(text);
+    return;
+  }
+
   if (controller_.send(text.toStdString())) {
     input_->clear();
+  }
+
+  set_busy(controller_.busy());
+}
+
+void ConversationView::steer(const QString& text) {
+  // `steer` rebuilds the transcript from the database (so the new bubble shows),
+  // and a rebuild tears down the streaming tail. Keep the reply that is already
+  // on screen so it does not blink away mid-sentence.
+  const bool was_streaming = streaming_started_;
+  const QString pending = pending_stream_text_;
+  const QString status = streaming_status_;
+
+  const std::uint32_t steered_id = controller_.steer(text.toStdString());
+
+  if (steered_id == 0) {
+    // The turn ended while the user was typing: treat it as a fresh send so the
+    // text is never silently swallowed.
+    if (controller_.send(text.toStdString())) {
+      input_->clear();
+    }
+
+    set_busy(controller_.busy());
+    return;
+  }
+
+  input_->clear();
+  steered_ids_.insert(steered_id);
+
+  // The controller's rebuild ran before this id was known, so rebuild once more
+  // for the "Steered" label; one user action, two cheap database reads.
+  reload();
+
+  if (was_streaming) {
+    streaming_started_ = true;
+    transcript_->begin_streaming();
+    pending_stream_text_ = pending;
+    streaming_status_ = status;
+    has_pending_stream_ = true;
+    flush_streaming_text();
   }
 
   set_busy(controller_.busy());

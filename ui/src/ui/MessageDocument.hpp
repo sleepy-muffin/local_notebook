@@ -15,8 +15,8 @@
 namespace ui {
 
 render::MessageMeta make_message_meta(
-    render::Role role, std::uint32_t id, std::u16string time, std::u16string tokens, bool editable,
-    std::u16string raw);
+    render::Role role, std::uint32_t id, std::u16string time, std::u16string tokens,
+    std::u16string status, bool editable, std::u16string raw);
 
 // A literal message (the reader's own text, notices, streamed status text). A
 // single block keeps the source line breaks as hard breaks, so paragraph

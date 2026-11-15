@@ -37,10 +37,11 @@ public:
   // chat turns use, and not what the summarisers run at.
   std::string reasoning_effort_;
 
-
+  // Memory should be triggered separatedly from session prompt.
+  // Make it manually triggered only now.
   std::string memory_;
   std::size_t memory_budget_ = 4000;
-  std::size_t memory_threshold_ = 80000;
+  std::size_t memory_budget_across_messages_ = 16000;
   std::size_t memory_budget_for_session_compact_ = 16000;
 };
 

@@ -25,21 +25,22 @@ namespace {
 struct SummaryPreset {
   const char* name;
   int memory_budget;
-  int trigger;
   int session_pool;
+  int message_pool;
 };
 
 constexpr SummaryPreset kSummaryPresets[] = {
-    // Tiers follow the same context windows as the session budget presets: the
-    // memory trigger sits well inside the window (Zed compacts at 90%), and the
-    // memory itself is allowed to grow with it so a large window is not spent on
-    // a postcard-sized memory.
-    {"Instant", 1'000, 8'000, 2'000},        //  32k window
-    {"Very Light", 2'000, 16'000, 4'000},    //  64k window
-    {"Light", 4'000, 32'000, 8'000},         // 128k window
-    {"Balanced", 8'000, 96'000, 16'000},     // 200k window
-    {"Heavy", 12'000, 192'000, 32'000},      // 400k window
-    {"Very Heavy", 16'000, 384'000, 48'000}, //   1M window
+    // Tiers follow the same context windows as the session budget presets: each
+    // pool grows with the window so a large context is not spent on a
+    // postcard-sized memory. The recent-message pool is half the session pool:
+    // the per-session summaries already carry the shape of a conversation, so
+    // the verbatim tail only needs to cover the newest stretch.
+    {"Instant", 1'000, 2'000, 1'000},        //  32k window
+    {"Very Light", 2'000, 4'000, 2'000},     //  64k window
+    {"Light", 4'000, 8'000, 4'000},          // 128k window
+    {"Balanced", 8'000, 16'000, 8'000},      // 200k window
+    {"Heavy", 12'000, 32'000, 16'000},       // 400k window
+    {"Very Heavy", 16'000, 48'000, 24'000},  //   1M window
 };
 
 // The reasoning levels offered for the chat and memory selectors. They are the
@@ -135,7 +136,7 @@ AssistantForm::AssistantForm(QWidget* parent) : QWidget(parent) {
 
   content->addWidget(h_separator(this));
 
-  content->addWidget(section_label(this, trs("Memory triggers")));
+  content->addWidget(section_label(this, trs("Memory preset")));
 
   preset_ = new ComboBox(this);
   preset_->addItem(trs("Apply a preset..."));
@@ -144,24 +145,20 @@ AssistantForm::AssistantForm(QWidget* parent) : QWidget(parent) {
   }
   content->addWidget(preset_);
 
-  {
-    auto* form = form_layout(this);
-
-    summary_trigger_ = make_spin(this, 0);
-    summary_session_budget_ = make_spin(this, 0);
-
-    form->addRow(field_label(this, trs("Trigger tokens")), summary_trigger_);
-    form->addRow(field_label(this, trs("Session pool")), summary_session_budget_);
-    content->addLayout(form);
-  }
-
   content->addWidget(h_separator(this));
 
   content->addWidget(section_label(this, trs("Budgets")));
   {
     auto* form = form_layout(this);
     summary_token_budget_ = make_spin(this, 0);
+    summary_session_budget_ = make_spin(this, 0);
+    summary_message_pool_ = make_spin(this, 0);
+
     form->addRow(field_label(this, trs("Memory budget")), summary_token_budget_);
+    // The two pools a memory update reads: each session's newest summary, and the
+    // newest messages across all sessions.
+    form->addRow(field_label(this, trs("Session pool")), summary_session_budget_);
+    form->addRow(field_label(this, trs("Recent messages pool")), summary_message_pool_);
     content->addLayout(form);
   }
 
@@ -172,8 +169,8 @@ AssistantForm::AssistantForm(QWidget* parent) : QWidget(parent) {
 
     const SummaryPreset& summary_preset = kSummaryPresets[index - 1];
     summary_token_budget_->setValue(summary_preset.memory_budget);
-    summary_trigger_->setValue(summary_preset.trigger);
     summary_session_budget_->setValue(summary_preset.session_pool);
+    summary_message_pool_->setValue(summary_preset.message_pool);
   });
 
   content->addStretch(1);
@@ -198,9 +195,10 @@ void AssistantForm::set_assistant(const felis::bell::assistant& assistant) {
   instructions_->setPlainText(to_qstring(assistant.custom_instructions_));
 
   summary_token_budget_->setValue(static_cast<int>(assistant.memory_budget_));
-  summary_trigger_->setValue(static_cast<int>(assistant.memory_threshold_));
   summary_session_budget_->setValue(
       static_cast<int>(assistant.memory_budget_for_session_compact_));
+  summary_message_pool_->setValue(
+      static_cast<int>(assistant.memory_budget_across_messages_));
 }
 
 void AssistantForm::write_into(felis::bell::assistant& assistant) const {
@@ -227,9 +225,10 @@ void AssistantForm::write_into(felis::bell::assistant& assistant) const {
   assistant.custom_instructions_ = instructions_->toPlainText().toStdString();
 
   assistant.memory_budget_ = static_cast<std::size_t>(summary_token_budget_->value());
-  assistant.memory_threshold_ = static_cast<std::size_t>(summary_trigger_->value());
   assistant.memory_budget_for_session_compact_ =
       static_cast<std::size_t>(summary_session_budget_->value());
+  assistant.memory_budget_across_messages_ =
+      static_cast<std::size_t>(summary_message_pool_->value());
 }
 
 bool AssistantForm::validate_base_url(QString& error) const {

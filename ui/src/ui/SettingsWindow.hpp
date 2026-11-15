@@ -4,8 +4,13 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
+#include <mutex>
+#include <string>
 #include <utility>
 #include <vector>
+
+#include <felis/async.hpp>
 
 #include "settings/metrics.hpp"
 #include "settings/settings.hpp"
@@ -13,10 +18,13 @@
 class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
+class QLabel;
 class QListWidget;
+class QPushButton;
 class QShowEvent;
 class QSpinBox;
 class QStackedWidget;
+class QTimer;
 class QWidget;
 
 namespace felis::bell {
@@ -36,8 +44,10 @@ class PlainTextEdit;
 class SettingsWindow : public QDialog {
 public:
   explicit SettingsWindow(
-      felis::bell::client& api, lnb::Settings& settings, QWidget* parent = nullptr
+      felis::bell::client& api, lnb::Settings& settings,
+      felis::async::multi_executor<void()>& executor, QWidget* parent = nullptr
   );
+  ~SettingsWindow() override;
 
   // Kept for the caller's convenience; the current session is shown on About.
   void set_current_session(std::uint32_t session_id) { current_session_ = session_id; }
@@ -62,8 +72,14 @@ private:
   void restore_metrics_defaults();
   void save();
 
+  // Starts one manual memory merge on the shared executor, and drains its result
+  // on the GUI thread. The update is never automatic and never blocks the UI.
+  void start_memory_update();
+  void poll_memory_update();
+
   felis::bell::client& api_;
   lnb::Settings& settings_;
+  felis::async::multi_executor<void()>& executor_;
 
   QListWidget* nav_ = nullptr;
   QStackedWidget* stack_ = nullptr;
@@ -96,6 +112,21 @@ private:
 
   AssistantForm* assistant_form_ = nullptr;
   PlainTextEdit* assistant_memory_ = nullptr;
+  QPushButton* update_memory_ = nullptr;
+  QLabel* memory_status_ = nullptr;
+  QTimer* memory_poll_ = nullptr;
+
+  // The worker only writes this record; `poll_memory_update` reads it on the GUI
+  // thread. Shared by pointer so a result arriving after the window is gone lands
+  // in live memory instead of a destroyed object.
+  struct memory_update_state {
+    std::mutex mutex;
+    bool done = false;
+    bool ok = false;
+    std::string message;
+  };
+  std::shared_ptr<memory_update_state> memory_state_;
+  felis::async::multi_executor<void()>::handle memory_handle_;
 
   std::uint32_t current_session_ = 0;
   std::function<void()> on_saved_;

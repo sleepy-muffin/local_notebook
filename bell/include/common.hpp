@@ -9,10 +9,10 @@ namespace felis::bell {
 
 
 enum class error_code : std::uint32_t {
-  success = 0,
+  SUCCESS = 0,
 
 
-  err_invalid_session_id = 100,
+  ERR_INVALID_SESSION_ID = 100,
   ERR_SESSION_SUMMARY_TRIGGER_HAS_MET = 200,
   ERR_ASSISTANT_MEMORY_TRIGGER_HAS_MET = 201,
 
@@ -40,8 +40,8 @@ enum class message_kind : std::uint8_t {
 enum class session_kind : std::uint8_t {
   undefined = 0,
   standard = 1,
-  temporary = 2,   // This session is not saved to the database
-  standalone = 3,    // This session is saved to the database, but memory excludes it.
+  temporary = 2,   // This session is not saved to the database, not implemented.
+  standalone = 3,    // This session is saved to the database, but memory excludes it, not implemented.
 
 };
 

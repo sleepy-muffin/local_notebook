@@ -312,6 +312,90 @@
   return payload;
 }
 
+// Builds the single request that merges the assistant's memory. It carries no
+// tools (the model must only merge, never act), states the merge rules in
+// `instructions`, and ends with an explicit user turn asking for the result --
+// without that trailing turn a transcript tipped by an assistant reply makes the
+// model continue the conversation instead of writing the memory.
+[[nodiscard]] boost::json::object build_memory_request(
+  const std::string& current_memory,
+  const std::vector<felis::bell::session_summary>& summaries,
+  const std::vector<felis::bell::shadowed_message>& recent_messages,
+  std::size_t max_output_tokens,
+  const felis::bell::assistant& ass
+) {
+  boost::json::array input;
+
+  // The existing memory and each session's own summary form one context block:
+  // they are all background the model already knows, not turns to answer.
+  std::string context;
+  if (!current_memory.empty()) {
+    context += "## Current memory\n";
+    context += current_memory;
+    context += "\n\n";
+  }
+  for (const felis::bell::session_summary& summary : summaries) {
+    context += "## Session: " + summary.session_title_ + "\n";
+    context += summary.text_;
+    context += "\n\n";
+  }
+  if (!context.empty()) {
+    boost::json::object entry;
+    entry["role"] = "user";
+    entry["content"] = std::move(context);
+    input.emplace_back(std::move(entry));
+  }
+
+  // The newest conversation rows across sessions, in conversation order, so the
+  // model reads what happened after those summaries.
+  for (const felis::bell::shadowed_message& msg : recent_messages) {
+    boost::json::object entry;
+    entry["role"] = msg.kind_ == felis::bell::message_kind::user_prompt
+        ? "user"
+        : "assistant";
+    entry["content"] = msg.content_;
+    input.emplace_back(std::move(entry));
+  }
+
+  {
+    boost::json::object closing_turn;
+    closing_turn["role"] = "user";
+    closing_turn["content"] =
+        "Write the updated memory now: one compact Markdown note that keeps every "
+        "standing fact, decision, preference, open task and file path, drops small "
+        "talk and anything already stale, and merges duplicates. Output only the "
+        "memory text \u2014 no preamble, no tool calls, no questions.";
+    input.emplace_back(std::move(closing_turn));
+  }
+
+  boost::json::object payload;
+  payload["model"] = ass.model_;
+  payload["input"] = std::move(input);
+  payload["stream"] = true;
+  payload["store"] = false;
+  payload["instructions"] =
+      "You maintain the assistant's long-term memory: a short note carried into "
+      "every future session. You are given the memory as it stands, each session's "
+      "own summary, and the newest messages across sessions. Rewrite the memory so "
+      "it absorbs the new material without growing without bound; omit what is no "
+      "longer relevant. Never invent facts that are not in the material above.";
+
+  if (max_output_tokens > 0) {
+    payload["max_output_tokens"] = static_cast<std::int64_t>(max_output_tokens);
+  }
+
+  // An empty value or "none" means "do not request reasoning": the field is
+  // omitted rather than sent as "none", which some gateways reject (mirrors
+  // `build_responses_request`).
+  if (!ass.reasoning_effort_.empty() && ass.reasoning_effort_ != "none") {
+    boost::json::object reasoning;
+    reasoning["effort"] = ass.reasoning_effort_;
+    payload["reasoning"] = std::move(reasoning);
+  }
+
+  return payload;
+}
+
 // One streaming POST against the configured Responses endpoint. The decoded
 // deltas drive `callbacks`; on success the finished turn is returned, otherwise
 // `std::nullopt` (with the reason copied into `error_out`).
@@ -439,7 +523,8 @@ void felis::bell::client::prompt(
     std::stop_token stop,
     size_type session_id,
     size_type user_message_id,
-    const prompt_events& events) {
+    const prompt_events& events,
+    const std::function<std::uint32_t()>& drain_steering) {
 
   std::optional<session> loaded = db_->get_session(session_id);
   if (!loaded.has_value()) {
@@ -553,6 +638,15 @@ void felis::bell::client::prompt(
     }
 
     const std::vector<shadowed_message> msgs = request_messages(session_id, false);
+
+    // The newest id this request carries. A steer that arrived *after* this read
+    // is newer than everything here and has to wait for one more iteration; one
+    // that arrived before it is already inside the request and must not force a
+    // duplicate answer.
+    std::uint32_t requested_id = 0;
+    for (const shadowed_message& message : msgs) {
+      requested_id = std::max(requested_id, message.id_);
+    }
 
     const auto payload = build_responses_request(
       sess.custom_instructions(),
@@ -694,13 +788,75 @@ void felis::bell::client::prompt(
 
       idle = false;
     } else {
-      idle = true;
+      // A prompt steered in while this reply was streaming deserves an answer in
+      // the same turn: rerunning the loop picks it up from the transcript instead
+      // of leaving it parked until the user sends again.
+      const std::uint32_t steered_id = drain_steering ? drain_steering() : 0;
+      idle = steered_id <= requested_id;
     }
   }
 
   if (events.on_done) {
     events.on_done(ok, error);
   }
+}
+
+bool felis::bell::client::update_memory(
+    std::stop_token stop, const prompt_events& events) {
+  // Snapshot the assistant once: the request is built from a consistent copy
+  // even if the settings window edits the assistant while this runs.
+  const assistant assistant_snapshot = assistant_state_->lock().data_->assistant_;
+
+  const std::vector<session_summary> summaries =
+      db_->session_summaries(assistant_snapshot.memory_budget_for_session_compact_);
+  const std::vector<shadowed_message> recent =
+      db_->messages_across_sessions(assistant_snapshot.memory_budget_across_messages_);
+
+  // Nothing to merge is not an error: the first press on a fresh assistant.
+  if (summaries.empty() && recent.empty()) {
+    felis::log::info("memory update skipped: no summaries and no recent messages");
+    if (events.on_done) events.on_done(false, "no new conversation to merge into memory yet");
+    return false;
+  }
+
+  if (events.on_status) events.on_status("Updating memory\u2026");
+
+  const boost::json::object payload = build_memory_request(
+    assistant_snapshot.memory_, summaries, recent,
+    assistant_snapshot.memory_budget_, assistant_snapshot);
+
+  // The memory update is invisible context work: its deltas must never reach the
+  // transcript. Swallow the text and keep the stream alive.
+  felis::net::llm::StreamCallbacks callbacks;
+  callbacks.on_text = [](std::string_view) { return true; };
+
+  std::string request_error;
+  const std::optional<felis::net::llm::Result> merged = stream_llm_request(
+    stop, payload, assistant_snapshot, callbacks, request_error);
+
+  if (!merged.has_value()) {
+    felis::log::error("memory update request failed: {}", request_error);
+    if (events.on_done) events.on_done(false, request_error);
+    return false;
+  }
+
+  // Same guard as compaction: a reasoning model can spend the whole output budget
+  // thinking and reply with a bare "\n\n". Overwriting the memory with that
+  // would silently erase it.
+  if (merged->text.find_first_not_of(" \t\r\n\f\v") == std::string::npos) {
+    felis::log::error(
+      "memory update produced a blank reply ({} output tokens); memory left unchanged",
+      merged->usage.output_tokens);
+    if (events.on_done) events.on_done(false, "the model returned no memory text");
+    return false;
+  }
+
+  assistant updated = assistant_snapshot;
+  updated.memory_ = merged->text;
+  set_assistant(updated);
+
+  if (events.on_done) events.on_done(true, std::string_view());
+  return true;
 }
 
 felis::bell::error_code felis::bell::client::open_assistant() {
@@ -739,5 +895,5 @@ felis::bell::error_code felis::bell::client::open_assistant() {
 
   db_ = std::make_unique<database>(store_.assistant_db(requested).string());
 
-  return error_code::success;
+  return error_code::SUCCESS;
 }

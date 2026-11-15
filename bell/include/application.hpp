@@ -31,6 +31,11 @@ struct shadowed_message{
   // been stored yet.
   std::string made_at_;
 
+  // The id of the inline summary that absorbed this message, or 0 while it is
+  // still part of the live context. The transcript shows it beside the message
+  // id so a reader can see which summary folded a row away.
+  uint32_t compacted_at_ = 0;
+
   std::optional<tool_call_info> tool_call_;
 
 };

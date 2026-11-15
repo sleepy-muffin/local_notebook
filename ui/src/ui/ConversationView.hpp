@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -97,6 +98,9 @@ private:
   void prompt_edit(std::uint32_t message_id, const QString& current);
   void flush_streaming_text();
   void submit();
+  // Injects a prompt into the running turn without tearing down the reply that
+  // is already on screen.
+  void steer(const QString& text);
   void set_busy(bool busy);
 
   void apply_composer_style();
@@ -119,6 +123,9 @@ private:
 
   bool busy_ = false;
   bool style_stale_ = false;
+
+  // Prompts injected into a running turn, so their rows can say so.
+  std::set<std::uint32_t> steered_ids_;
 
   QPlainTextEdit* input_ = nullptr;
   QToolButton* send_button_ = nullptr;

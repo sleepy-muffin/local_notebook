@@ -98,11 +98,13 @@ boost::json::object to_json(const felis::bell::assistant& assistant) {
 
   object["memory_budget"] =
       static_cast<std::uint64_t>(assistant.memory_budget_);
-  object["memory_threshold"] =
-      static_cast<std::uint64_t>(assistant.memory_threshold_);
   object["memory_budget_for_session_compact"] =
       static_cast<std::uint64_t>(
         assistant.memory_budget_for_session_compact_
+      );
+  object["memory_budget_across_messages"] =
+      static_cast<std::uint64_t>(
+        assistant.memory_budget_across_messages_
       );
 
   return object;
@@ -139,12 +141,13 @@ felis::bell::assistant from_json(const boost::json::object& object) {
   assistant.memory_budget_ = size_or(
       object, "memory_budget", assistant.memory_budget_
   );
-  assistant.memory_threshold_ = size_or(
-      object, "memory_threshold", assistant.memory_threshold_
-  );
   assistant.memory_budget_for_session_compact_ = size_or(
       object, "memory_budget_for_session_compact",
       assistant.memory_budget_for_session_compact_
+  );
+  assistant.memory_budget_across_messages_ = size_or(
+      object, "memory_budget_across_messages",
+      assistant.memory_budget_across_messages_
   );
 
   assistant.protocol_ = protocol_from_name(string_or(object, "protocol"));

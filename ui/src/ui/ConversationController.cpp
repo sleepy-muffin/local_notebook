@@ -1,5 +1,6 @@
 #include "ui/ConversationController.hpp"
 
+#include <algorithm>
 #include <utility>
 
 namespace ui {
@@ -66,8 +67,18 @@ bool ConversationController::send(std::string text) {
   felis::bell::client* client = &client_;
 
   handle_ = executor_.spawn(
-      [client, sid, user_message_id, events](std::stop_token stop) mutable {
-        client->prompt(stop, sid, user_message_id, events);
+      [client, sid, user_message_id, events, state](std::stop_token stop) mutable {
+        // The worker only learns *that* a prompt was steered in; the prompt itself
+        // was written to the transcript by `steer`, which `prompt` re-reads every
+        // iteration. `state` outlives this controller.
+        const std::function<std::uint32_t()> drain = [state]() {
+          std::scoped_lock lock(state->mutex);
+          const std::uint32_t steered = state->steered_id;
+          state->steered_id = 0;
+          return steered;
+        };
+
+        client->prompt(stop, sid, user_message_id, events, drain);
       }
   );
 
@@ -81,6 +92,29 @@ bool ConversationController::send(std::string text) {
 }
 
 void ConversationController::cancel() { handle_.request_stop(); }
+
+std::uint32_t ConversationController::steer(std::string text) {
+  if (!busy() || text.empty()) {
+    return 0;
+  }
+
+  // Persist on the GUI thread, exactly like a normal send, so the bubble is in the
+  // transcript before the view rebuilds and the row already owns a real id — the
+  // worker compares that id against what its last request carried.
+  const felis::bell::size_type steered_id =
+      client_.begin_turn(felis::bell::size_type(session_id_), text);
+
+  {
+    std::scoped_lock lock(state_->mutex);
+    state_->steered_id = std::max(state_->steered_id, steered_id.get());
+  }
+
+  if (on_changed_) {
+    on_changed_();
+  }
+
+  return steered_id.get();
+}
 
 void ConversationController::delete_message_only(std::uint32_t message_id) {
   client_.delete_message(felis::bell::size_type(message_id));

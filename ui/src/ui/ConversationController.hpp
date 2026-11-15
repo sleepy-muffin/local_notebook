@@ -44,6 +44,13 @@ public:
   // empty. Returns whether a turn was started.
   [[nodiscard]] bool send(std::string text);
 
+  // Steers the in-flight turn with a prompt typed while it runs. The prompt is
+  // persisted now — on the GUI thread, so the bubble appears at once — and the
+  // worker is asked to run one more iteration so the model answers it in this
+  // same turn. Returns the new message id, or 0 when no turn is in flight (the
+  // caller should `send` instead) or the text is empty.
+  [[nodiscard]] std::uint32_t steer(std::string text);
+
   // Requests the in-flight turn to stop. The partial reply is discarded by bell.
   void cancel();
 
@@ -86,6 +93,10 @@ private:
   struct shared_state {
     std::mutex mutex;
     std::vector<event> events;
+
+    // Newest prompt steered into the running turn, 0 when none is pending. The
+    // worker consumes it through `drain_steering`; see `client::prompt`.
+    std::uint32_t steered_id = 0;
   };
 
   void push(event_kind kind, std::string_view text);

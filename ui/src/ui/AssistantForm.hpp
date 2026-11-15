@@ -46,8 +46,8 @@ private:
   QComboBox* reasoning_ = nullptr;
   QComboBox* preset_ = nullptr;
   QSpinBox* summary_token_budget_ = nullptr;
-  QSpinBox* summary_trigger_ = nullptr;
   QSpinBox* summary_session_budget_ = nullptr;
+  QSpinBox* summary_message_pool_ = nullptr;
 };
 
 } // namespace ui

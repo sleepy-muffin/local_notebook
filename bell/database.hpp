@@ -16,6 +16,15 @@
 
 namespace felis::bell {
 
+// One session's newest inline summary, as offered to the assistant-wide memory
+// update. `session_title_` labels the block in the merge request; `text_` is the
+// summary itself.
+struct session_summary {
+  size_type session_id_;
+  std::string session_title_;
+  std::string text_;
+};
+
 class database {
 public:
   explicit database(std::string_view path);
@@ -49,6 +58,26 @@ public:
   // Shadowed Message
   // std::vector<message> messages_after_memory_watermark() const;
   std::vector<shadowed_message> recent_messages(size_type session_id, std::size_t count) const;
+
+  // Memory inputs. Both read only `session_kind::standard` sessions: `temporary`
+  // and `standalone` are excluded by their kind, with no per-session flag.
+  //
+  // The newest `inline_compact` summary of every standard session, newest first,
+  // charged against `token_budget` with `felis::str::estimate_tokens` so the
+  // shared memory request cannot grow without bound.
+  [[nodiscard]] std::vector<session_summary> session_summaries(
+    std::size_t token_budget
+  ) const;
+
+  // The newest plain conversation rows (user prompts and assistant text) across
+  // every standard session, walked newest first and charged against
+  // `token_budget`, then returned oldest first. Tool traffic, stored reasoning
+  // payloads and summaries are excluded: memory is prose, the summaries arrive
+  // through `session_summaries` already, and a call/result pair cut by the budget
+  // would leave an unanswered `function_call` the provider rejects.
+  [[nodiscard]] std::vector<shadowed_message> messages_across_sessions(
+    std::size_t token_budget
+  ) const;
   std::uint32_t insert_message(const shadowed_message& message) const;
 
   // Request Usage

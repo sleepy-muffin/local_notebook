@@ -705,7 +705,7 @@ void MainWindow::new_session() {
 
 void MainWindow::open_settings() {
   if (settings_window_ == nullptr) {
-    settings_window_ = new SettingsWindow(api_, settings_, this);
+    settings_window_ = new SettingsWindow(api_, settings_, executor_, this);
     settings_window_->set_on_saved([this]() {
       apply_window_style();
       refresh_sessions();
