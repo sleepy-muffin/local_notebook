@@ -91,6 +91,12 @@ private:
   QWidget* sidebar_separator_ = nullptr;
   bool sidebar_visible_ = true;
 
+  // Pinned sessions get their own band above the regular list.
+  QWidget* pinned_band_ = nullptr;
+  QListView* pinned_view_ = nullptr;
+  SessionListModel* pinned_model_ = nullptr;
+  SessionItemDelegate* pinned_delegate_ = nullptr;
+
   QListView* sessions_view_ = nullptr;
   SessionListModel* sessions_model_ = nullptr;
   SessionItemDelegate* sessions_delegate_ = nullptr;

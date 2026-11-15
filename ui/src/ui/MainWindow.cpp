@@ -353,6 +353,27 @@ QListView* MainWindow::build_session_list(
       [bound_delegate](const QModelIndex&) { bound_delegate->clear_action_click(); }
   );
 
+  // Keep at most one of the two lists highlighted. The highlight is the selection
+  // fill, so clearing the other list's selection is enough; clearing the selection
+  // leaves its current index alone, which does not emit currentChanged and so
+  // cannot recurse back into this handler.
+  QListView* const bound_view = view;
+  connect(
+      view->selectionModel(), &QItemSelectionModel::currentChanged, this,
+      [this, bound_view](const QModelIndex& current, const QModelIndex&) {
+        if (!current.isValid()) {
+          return;
+        }
+
+        QListView* const other =
+            bound_view == pinned_view_ ? sessions_view_ : pinned_view_;
+
+        if (other != nullptr) {
+          other->clearSelection();
+        }
+      }
+  );
+
   connect(view, &QListView::clicked, this, [this, bound_delegate](const QModelIndex& index) {
     if (bound_delegate->take_action_click()) {
       return;
@@ -393,6 +414,31 @@ QWidget* MainWindow::build_sidebar() {
 
   new_session_layout->addWidget(new_session_button_);
   layout->addWidget(new_session_row);
+
+  // ---- PINNED category + list ----
+  // Above SESSIONS, and hidden entirely while no session is pinned. The list
+  // sizes to its rows, so the SESSIONS category slides up under the New Session
+  // row whenever the band disappears.
+  pinned_band_ = new QWidget(sidebar);
+  auto* pinned_layout = new QVBoxLayout(pinned_band_);
+  pinned_layout->setContentsMargins(0, 0, 0, 0);
+  pinned_layout->setSpacing(0);
+
+  {
+    auto* pinned_category = new QLabel(trs("PINNED"), pinned_band_);
+    pinned_category->setObjectName(QStringLiteral("SidebarCategory"));
+    pinned_category->setContentsMargins(kSidebarPadding, 10, 0, 4);
+    pinned_layout->addWidget(pinned_category);
+  }
+
+  pinned_view_ = build_session_list(
+      pinned_band_, QStringLiteral("PinnedSessions"), pinned_model_, pinned_delegate_
+  );
+  pinned_view_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+  pinned_layout->addWidget(pinned_view_);
+  pinned_band_->setVisible(false);
+
+  layout->addWidget(pinned_band_);
 
   category_ = new QLabel(trs("SESSIONS"), sidebar);
   category_->setObjectName(QStringLiteral("SidebarCategory"));
@@ -458,18 +504,94 @@ QWidget* MainWindow::build_right_pane() {
 }
 
 void MainWindow::refresh_sessions() {
+  if (sessions_model_ == nullptr || pinned_model_ == nullptr) {
+    return;
+  }
+
   std::vector<felis::bell::shadowed_session> sessions = api_.sessions(kSessionListLimit);
   const std::unordered_map<std::uint32_t, std::string> last_times = api_.session_last_times();
 
-  std::vector<std::string> times;
-  times.reserve(sessions.size());
+  // Split into the two categories. sessions_by_recent() already returns pinned
+  // sessions first and each group keeps its newest-message order, so no extra
+  // sort is needed.
+  std::vector<felis::bell::shadowed_session> pinned;
+  std::vector<felis::bell::shadowed_session> rest;
+  std::vector<std::string> pinned_times;
+  std::vector<std::string> rest_times;
 
   for (const felis::bell::shadowed_session& session: sessions) {
     const auto it = last_times.find(session.id_);
-    times.push_back(it != last_times.end() ? it->second : std::string{});
+    std::string time = it != last_times.end() ? it->second : std::string{};
+
+    if (session.pinned_) {
+      pinned.push_back(session);
+      pinned_times.push_back(std::move(time));
+    } else {
+      rest.push_back(session);
+      rest_times.push_back(std::move(time));
+    }
   }
 
-  sessions_model_->set_sessions(std::move(sessions), std::move(times));
+  // Only reset a model when its order, titles, times or pin states actually
+  // changed, so a new message does not clear and rebuild the lists on every turn.
+  const auto unchanged = [](
+                             const SessionListModel* model,
+                             const std::vector<felis::bell::shadowed_session>& rows,
+                             const std::vector<std::string>& times
+                         ) {
+    if (static_cast<std::size_t>(model->rowCount()) != rows.size()) {
+      return false;
+    }
+
+    for (int row = 0; row < model->rowCount(); ++row) {
+      const felis::bell::shadowed_session* stored = model->session_at(row);
+      const felis::bell::shadowed_session& wanted = rows[static_cast<std::size_t>(row)];
+
+      if (stored == nullptr || stored->id_ != wanted.id_ || stored->title_ != wanted.title_ ||
+          stored->pinned_ != wanted.pinned_ ||
+          model->last_time_at(row) != times[static_cast<std::size_t>(row)]) {
+        return false;
+      }
+    }
+
+    return true;
+  };
+
+  if (!unchanged(pinned_model_, pinned, pinned_times)) {
+    pinned_model_->set_sessions(std::move(pinned), std::move(pinned_times));
+  }
+
+  if (!unchanged(sessions_model_, rest, rest_times)) {
+    sessions_model_->set_sessions(std::move(rest), std::move(rest_times));
+  }
+
+  // The pinned band sizes to its rows and disappears entirely when empty.
+  int pinned_height = 0;
+
+  for (int row = 0; row < pinned_model_->rowCount(); ++row) {
+    pinned_height += std::max(0, pinned_view_->sizeHintForRow(row));
+  }
+
+  pinned_view_->setFixedHeight(pinned_height);
+  pinned_band_->setVisible(pinned_model_->rowCount() > 0);
+
+  // Re-select the current session (a model reset clears the selection). It lives
+  // in exactly one of the two lists.
+  const int pinned_row = pinned_model_->row_for(current_session_);
+
+  if (pinned_row >= 0) {
+    pinned_view_->setCurrentIndex(pinned_model_->index(pinned_row, 0));
+    sessions_view_->clearSelection();
+  } else {
+    pinned_view_->clearSelection();
+
+    const int row = sessions_model_->row_for(current_session_);
+    if (row >= 0) {
+      sessions_view_->setCurrentIndex(sessions_model_->index(row, 0));
+    } else {
+      sessions_view_->clearSelection();
+    }
+  }
 
   // Remove conversation views whose session no longer exists.
   for (auto it = conversations_.begin(); it != conversations_.end();) {
@@ -521,9 +643,17 @@ void MainWindow::open_conversation(std::uint32_t session_id) {
   current_session_ = session_id;
   workspace_->setCurrentWidget(view);
 
-  const int row = sessions_model_->row_for(session_id);
-  if (row >= 0) {
-    sessions_view_->setCurrentIndex(sessions_model_->index(row, 0));
+  const int pinned_row = pinned_model_->row_for(session_id);
+  if (pinned_row >= 0) {
+    pinned_view_->setCurrentIndex(pinned_model_->index(pinned_row, 0));
+    sessions_view_->clearSelection();
+  } else {
+    pinned_view_->clearSelection();
+
+    const int row = sessions_model_->row_for(session_id);
+    if (row >= 0) {
+      sessions_view_->setCurrentIndex(sessions_model_->index(row, 0));
+    }
   }
 
   update_header();

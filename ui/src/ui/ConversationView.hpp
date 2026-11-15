@@ -61,8 +61,17 @@ public:
   // Re-applies theme colours to the composer and the transcript.
   void refresh_style();
 
-  // Marks the view as needing a restyle without doing the work now.
-  void mark_style_stale() { style_stale_ = true; }
+  // Marks the view as needing a restyle. A visible view is restyled at once, so
+  // a theme or metric change lands immediately; a hidden one waits for its next
+  // show, where the work is cheap and the layout is current.
+  void mark_style_stale() {
+    if (isVisible()) {
+      refresh_style();
+      style_stale_ = false;
+    } else {
+      style_stale_ = true;
+    }
+  }
 
   // Called by the window's poll timer; advances the in-flight generation.
   void poll();
