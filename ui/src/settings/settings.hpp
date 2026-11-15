@@ -36,18 +36,22 @@ struct Settings {
       std::array<float, 4>{0.094f, 0.098f, 0.149f, 0.85f};
 
   // General UI font (every widget), chat font (transcript + composer) and
-  // monospace font (code). Carlito is the default interface font; an empty
-  // family keeps the system default (for the chat and monospace roles).
+  // monospace font (code). Carlito and JetBrains Mono are the defaults; an
+  // empty family keeps the system default for that role.
   std::string ui_font = "Carlito";
   int ui_font_size = 11;
   std::string font;
   int font_size = 12;
-  std::string mono_font;
+  std::string mono_font = "JetBrains Mono";
   int mono_font_size = 11;
 
   // Inline code size as a fraction of the surrounding text. Inline code is
   // scaled from the chat font so it never feels oversized next to the prose.
   float inline_code_scale = 0.9f;
+
+  // Tool-call/result strip size as a fraction of the prose size. The strip is
+  // deliberately subtle, so it draws smaller than the messages it annotates.
+  float tool_text_scale = 0.88f;
 
   // When true, Enter inserts a newline and Ctrl+Enter sends; when false the
   // reverse.

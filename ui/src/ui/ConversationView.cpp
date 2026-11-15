@@ -25,7 +25,6 @@
 
 #include <algorithm>
 #include <functional>
-#include <iterator>
 #include <optional>
 #include <string>
 #include <vector>
@@ -504,11 +503,12 @@ void ConversationView::append_rendered_message(
     render::Document& document, const felis::bell::shadowed_message& message) const {
   using felis::bell::message_kind;
 
-  // The readable turns are full messages; tool calls and their results are
-  // folded into a compact strip so the plumbing is visible without crowding the
-  // transcript, and hidden reasoning is never shown at all. A strip carries a
-  // short bold title ("Tool call · name" / "Tool result · name") drawn at
-  // content size, so a call and its result read as clearly different things.
+  // The readable turns are full messages; tool calls, their results and inline
+  // summaries are folded into a compact strip so the plumbing is visible without
+  // crowding the transcript, and hidden reasoning is never shown at all. A strip
+  // carries a short bold title ("Tool call · name" / "Tool result · name" /
+  // "Inline summary") drawn at content size, so its parts read as clearly
+  // different things.
   render::Role role = render::Role::Assistant;
   bool markdown = true;
   bool editable = message.id_ != 0;
@@ -523,7 +523,12 @@ void ConversationView::append_rendered_message(
     case message_kind::assistant_output:
       break;
     case message_kind::inline_compact:
+      // A summary is generated text, not a turn: it gets the same subtle
+      // colours and smaller size as a tool strip.
+      role = render::Role::Tool;
       markdown = false;
+      editable = false;
+      title = trs("Inline summary");
       break;
     case message_kind::assistant_tool_call: {
       role = render::Role::Tool;
@@ -558,23 +563,23 @@ void ConversationView::append_rendered_message(
   std::vector<render::Block> blocks;
 
   if (!title.isEmpty()) {
-    // The strip's title row: bold, at normal content size, tight above the
-    // detail line that follows it.
-    render::Block heading;
-    heading.kind = render::BlockKind::Paragraph;
-    heading.full_scale = true;
-    heading.text = to_u16(title);
+    // A strip: the title line plus the detail line in one block, so the two
+    // share the strip's single (smaller) tool font size. The title is bold only,
+    // never larger, so it reads as a label rather than a heading.
+    render::Block strip;
+    strip.kind = render::BlockKind::Paragraph;
+    strip.text = to_u16(title);
     render::Span span;
-    span.length = static_cast<std::uint32_t>(heading.text.size());
+    span.length = static_cast<std::uint32_t>(strip.text.size());
     span.bold = true;
-    heading.spans.push_back(span);
-    blocks.push_back(std::move(heading));
+    strip.spans.push_back(span);
+    strip.text += u'\n';
+    strip.text += to_u16(text);
+    blocks.push_back(std::move(strip));
+  } else {
+    blocks = markdown ? make_markdown_blocks(text.toStdString())
+                      : make_plain_blocks(text.toStdString());
   }
-
-  auto body = markdown ? make_markdown_blocks(text.toStdString())
-                       : make_plain_blocks(text.toStdString());
-  blocks.insert(blocks.end(), std::make_move_iterator(body.begin()),
-                std::make_move_iterator(body.end()));
 
   append_message(document, std::move(meta), std::move(blocks));
 }

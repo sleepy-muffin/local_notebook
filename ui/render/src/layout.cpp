@@ -433,7 +433,7 @@ void Layout::layout_block(std::size_t block_index, float x, float width, float y
 
   Font base = block_font(block);
 
-  if (role == Role::Tool && !block.full_scale) {
+  if (role == Role::Tool) {
     base.size *= theme_.tool_font_scale;
   }
 
@@ -504,10 +504,6 @@ void Layout::layout_block(std::size_t block_index, float x, float width, float y
     geometry.gap_after = 0.0f;
   } else if (block.kind == BlockKind::ListItem) {
     geometry.gap_after = theme_.list_spacing;
-  } else if (role == Role::Tool && block.full_scale) {
-    // A strip's title sits tight above its own detail line, not a full
-    // paragraph gap away.
-    geometry.gap_after = 2.0f;
   } else {
     geometry.gap_after = theme_.paragraph_spacing;
   }

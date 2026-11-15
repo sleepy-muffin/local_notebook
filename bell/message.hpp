@@ -25,7 +25,7 @@ enum class tool_capability : std::uint32_t {
     online = 1 << 0,
     repo_read   = 1 << 1,
     repo_write  = 1 << 2,
-    bash   = 1 << 3,
+    terminal   = 1 << 3,
 };
 
 class tool_capabilities
@@ -42,6 +42,7 @@ public:
   bool online() const { return has_capability(tool_capability::online); }
   bool repo_read() const { return has_capability(tool_capability::repo_read); }
   bool repo_write() const { return has_capability(tool_capability::repo_write); }
+  bool terminal() const { return has_capability(tool_capability::terminal); }
 
 private:
   // constexpr tool_capabilities operator|(

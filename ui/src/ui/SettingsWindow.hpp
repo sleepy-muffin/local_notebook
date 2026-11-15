@@ -88,6 +88,7 @@ private:
   FontComboBox* mono_font_ = nullptr;
   QSpinBox* mono_font_size_ = nullptr;
   QDoubleSpinBox* inline_code_scale_ = nullptr;
+  QDoubleSpinBox* tool_text_scale_ = nullptr;
 
   // One spin box per editable ThemeMetrics field, so load/save and "restore to
   // defaults" can walk the whole set without repeating the field list.

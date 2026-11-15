@@ -41,6 +41,7 @@ bool theme_inputs_equal(const lnb::Settings& a, const lnb::Settings& b) {
          a.font_size == b.font_size && a.mono_font == b.mono_font &&
          a.mono_font_size == b.mono_font_size &&
          a.inline_code_scale == b.inline_code_scale &&
+         a.tool_text_scale == b.tool_text_scale &&
          a.background_url == b.background_url &&
          a.background_override == b.background_override && a.metrics == b.metrics;
 }
@@ -56,7 +57,8 @@ void set_font_box(FontComboBox* box, const std::string& family) {
 // the stored value was empty ("system default") and the user left the selector
 // on the application font, keep it empty rather than baking in a concrete family
 // — for the monospace role that would replace the platform monospace font with a
-// proportional one and break code rendering.
+// proportional one and break code rendering. (The monospace default is now a
+// concrete family, so this only matters for older settings files.)
 std::string stored_family(const FontComboBox* box, const std::string& original) {
   const QString family = box->currentFont().family();
   if (original.empty() && family == QApplication::font().family()) {
@@ -210,6 +212,15 @@ QWidget* SettingsWindow::build_config_page() {
         trs("Inline code size as a fraction of the surrounding text.")
     );
 
+    tool_text_scale_ = new DoubleSpinBox(content);
+    tool_text_scale_->setRange(0.50, 1.50);
+    tool_text_scale_->setSingleStep(0.05);
+    tool_text_scale_->setDecimals(2);
+    tool_text_scale_->setValue(static_cast<double>(settings_.tool_text_scale));
+    tool_text_scale_->setToolTip(
+        trs("Tool call and result size as a fraction of the message text.")
+    );
+
     form->addRow(field_label(content, trs("Interface font")), ui_font_);
     form->addRow(field_label(content, trs("Interface size")), ui_font_size_);
     form->addRow(field_label(content, trs("Chat font")), font_);
@@ -217,6 +228,7 @@ QWidget* SettingsWindow::build_config_page() {
     form->addRow(field_label(content, trs("Monospace font")), mono_font_);
     form->addRow(field_label(content, trs("Monospace size")), mono_font_size_);
     form->addRow(field_label(content, trs("Inline code size")), inline_code_scale_);
+    form->addRow(field_label(content, trs("Tool strip size")), tool_text_scale_);
 
     layout->addLayout(form);
   }
@@ -411,6 +423,7 @@ void SettingsWindow::reload_from_app() {
   set_font_box(mono_font_, settings_.mono_font);
   mono_font_size_->setValue(settings_.mono_font_size);
   inline_code_scale_->setValue(static_cast<double>(settings_.inline_code_scale));
+  tool_text_scale_->setValue(static_cast<double>(settings_.tool_text_scale));
 
   if (assistant_form_ != nullptr) {
     assistant_form_->set_assistant(api_.current_assistant());
@@ -465,6 +478,7 @@ void SettingsWindow::save() {
   settings_.mono_font = stored_family(mono_font_, settings_.mono_font);
   settings_.mono_font_size = mono_font_size_->value();
   settings_.inline_code_scale = static_cast<float>(inline_code_scale_->value());
+  settings_.tool_text_scale = static_cast<float>(tool_text_scale_->value());
 
   // Write the metric boxes back into a full ThemeMetrics and store it as the
   // override, so the layout knobs actually persist (nullopt would mean "use the

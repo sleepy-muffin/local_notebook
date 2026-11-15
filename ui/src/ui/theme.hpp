@@ -98,6 +98,10 @@ const QFont& mono_font();
 // than from the configured monospace size.
 float inline_code_scale();
 
+// Tool-call/result strip size as a fraction of the prose size. The strip is
+// deliberately subtle: it recedes below the messages it annotates.
+float tool_text_scale();
+
 // Convenience readers for the reading rhythm of message text.
 int line_height_other();
 int line_height_self();

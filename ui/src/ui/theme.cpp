@@ -43,6 +43,9 @@ struct ThemeState {
   // Inline code size as a fraction of the surrounding text.
   float inline_code_scale = 0.9f;
 
+  // Tool-call/result strip size as a fraction of the prose size.
+  float tool_text_scale = 0.88f;
+
   std::optional<QColor> tint;
 };
 
@@ -410,6 +413,10 @@ void apply_theme(QApplication& app, const lnb::Settings& settings) {
   current.inline_code_scale =
       settings.inline_code_scale > 0.0f ? settings.inline_code_scale : 0.9f;
 
+  // Same guard for the tool strip: a zero would make it disappear entirely.
+  current.tool_text_scale =
+      settings.tool_text_scale > 0.0f ? settings.tool_text_scale : 0.88f;
+
   const ThemeColors& c = current.theme.colors;
 
   // Start from the style's own palette rather than the one currently installed.
@@ -469,6 +476,10 @@ const QFont& mono_font() {
 
 float inline_code_scale() {
   return state().inline_code_scale;
+}
+
+float tool_text_scale() {
+  return state().tool_text_scale;
 }
 
 int line_height_other() {

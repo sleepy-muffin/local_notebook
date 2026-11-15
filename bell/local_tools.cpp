@@ -3,6 +3,10 @@
 #include <filesystem>
 #include <vector>
 
+#include <algorithm>
+#include <chrono>
+#include <sstream>
+
 #include <boost/json.hpp>
 #include <boost/regex.hpp>
 
@@ -14,6 +18,7 @@
 
 #include "tools.hpp"
 #include "message.hpp"
+#include "process.hpp"
 #include "web_tools.hpp"
 
 
@@ -419,9 +424,63 @@ int json_int_or(
 // ========== ---------- ---------- ---------- ---------- ---------- ==========
 } // namespace
 
+// Helpers for the command tool. A named namespace rather than an anonymous one,
+// per the project's rule, so they are one symbol each instead of one per TU.
+namespace felis::bell::detail
+{
+
+constexpr int default_command_timeout_seconds = 120;
+constexpr int max_command_timeout_seconds = 600;
+
+// Keeps a model-supplied timeout inside a range where it is useful: short
+// enough that a hung command does not block the turn, long enough for a build.
+std::chrono::seconds command_timeout(int requested_seconds) {
+  return std::chrono::seconds(
+      std::clamp(requested_seconds, 1, max_command_timeout_seconds)
+  );
+}
+
+// Renders a finished command for the model: the verdict first, then the output.
+// An empty result is stated explicitly so "no output" is distinct from "the
+// tool did nothing".
+std::string describe_command_result(
+    const felis::process::result& result, std::chrono::seconds timeout
+) {
+  if (result.outcome == felis::process::status::failed) {
+    return "Tool error: " + result.error;
+  }
+
+  std::ostringstream out;
+
+  if (result.cancelled) {
+    out << "cancelled";
+  } else if (result.timed_out) {
+    out << "killed after " << timeout.count() << "s (timeout)";
+  } else {
+    out << "exit code: " << result.exit_code;
+  }
+
+  if (result.truncated) {
+    out << " (output truncated)";
+  }
+
+  out << '\n';
+
+  if (result.output.empty()) {
+    out << "--- no output ---";
+  } else {
+    out << "--- output ---\n" << result.output;
+  }
+
+  return out.str();
+}
+
+} // namespace felis::bell::detail
+
 std::string felis::bell::execute_local_tool(
     const felis::net::llm::ToolCall& call, const std::vector<std::string>& shared_directories,
-    const std::optional<std::string>& proxy, const felis::bell::tool_capabilities& permissions
+    const std::optional<std::string>& proxy, const felis::bell::tool_capabilities& permissions,
+    std::stop_token stop
 ) {
   try {
     boost::system::error_code parse_error;
@@ -445,6 +504,7 @@ std::string felis::bell::execute_local_tool(
         call.name == "edit_file" || call.name == "delete_file";
     const bool is_online_tool =
         call.name == "fetch_url" || call.name == "web_search";
+    const bool is_terminal_tool = call.name == "run_command";
 
     if (is_read_tool && !permissions.repo_read()) {
       return "Tool error: file reading is disabled for this session";
@@ -458,16 +518,26 @@ std::string felis::bell::execute_local_tool(
       return "Tool error: online access is disabled for this session";
     }
 
-    // Filesystem tools need at least one shared directory; network tools do
-    // not, so the gate lives here instead of around the whole call.
-    const bool needs_root = is_read_tool || is_write_tool;
+    if (is_terminal_tool && !permissions.terminal()) {
+      return "Tool error: running commands is disabled for this session";
+    }
+
+    // Filesystem tools need at least one shared directory; network and command
+    // tools do not, so the gate lives here instead of around the whole call.
+    // The command tool still wants the list, because its working directory is
+    // the first shared directory.
+    const bool needs_root = is_read_tool || is_write_tool || is_terminal_tool;
 
     const std::vector<SharedRoot> roots = needs_root
         ? build_shared_roots(shared_directories)
         : std::vector<SharedRoot>{};
 
     if (needs_root && roots.empty()) {
-      return "Tool error: this session has no shared directories configured";
+      // The command tool can still run; it just has no working directory of its
+      // own and inherits the application's.
+      if (!is_terminal_tool) {
+        return "Tool error: this session has no shared directories configured";
+      }
     }
 
     if (call.name == "list_directory") {
@@ -584,6 +654,31 @@ std::string felis::bell::execute_local_tool(
       return "Deleted " + target.display + ".";
     }
 
+    if (call.name == "run_command") {
+      const std::string command = json_string_or(args, "command");
+
+      if (command.empty()) {
+        throw std::runtime_error("Missing command");
+      }
+
+      const std::chrono::seconds timeout = detail::command_timeout(
+          json_int_or(args, "timeout_seconds", detail::default_command_timeout_seconds)
+      );
+
+      felis::process::spec request;
+      request.command = command;
+      request.timeout = timeout;
+      request.stop = stop;
+
+      // Relative paths in the command line then mean the same thing they mean
+      // for the file tools: paths inside the first shared directory.
+      if (!roots.empty() && roots.front().available) {
+        request.cwd = roots.front().path;
+      }
+
+      return detail::describe_command_result(felis::process::run(request), timeout);
+    }
+
     if (call.name == "fetch_url") {
       const std::string url = json_string_or(args, "url");
       return felis::bell::fetch_url(url, proxy);
@@ -593,6 +688,7 @@ std::string felis::bell::execute_local_tool(
     //   const std::string query = json_string_or(args, "query");
     //   return felis::bell::web_search(query, proxy, permissions.online());
     // }
+
 
     throw std::runtime_error("Unknown tool: " + call.name);
   } catch (const std::filesystem::filesystem_error&) {

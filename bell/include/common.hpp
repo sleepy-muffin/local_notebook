@@ -8,11 +8,11 @@
 namespace felis::bell {
 
 
-enum class error_code {
+enum class error_code : std::uint32_t {
   success = 0,
 
 
-  ERR_INVALID_SESSION_ID = 100,
+  err_invalid_session_id = 100,
   ERR_SESSION_SUMMARY_TRIGGER_HAS_MET = 200,
   ERR_ASSISTANT_MEMORY_TRIGGER_HAS_MET = 201,
 

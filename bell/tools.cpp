@@ -1,5 +1,7 @@
 #include "tools.hpp"
 
+#include "process.hpp"
+
 
 namespace {
 
@@ -268,6 +270,39 @@ boost::json::array felis::bell::tool_definitions(const tool_capabilities& capabi
     web_search_function["parameters"] = std::move(parameters);
   }
 
+  // Command tool: the line is handed to the platform shell, so pipes,
+  // redirection and quoting behave the way a user expects. Not sandboxed; the
+  // session's "Run commands" checkbox is the consent gate.
+  boost::json::object run_function;
+  run_function["name"] = "run_command";
+  run_function["description"] =
+      "Run a command line through " + felis::process::shell_name() +
+      " and return its combined output and exit code. The working directory is "
+      "the session's first shared directory. Use it to build, test or inspect "
+      "the project. Commands are not sandboxed and are killed when the turn is "
+      "cancelled.";
+  {
+    boost::json::object properties;
+    properties["command"] = property(
+        "string",
+        "Command line to run. Pipes, redirection and quoting are interpreted "
+        "by the shell, not by this tool."
+    );
+    properties["timeout_seconds"] = property(
+        "integer",
+        "Seconds to wait before the command is killed. Defaults to 120, "
+        "clamped to 1..600."
+    );
+
+    boost::json::object parameters;
+    parameters["type"] = "object";
+    parameters["properties"] = std::move(properties);
+    parameters["required"] = boost::json::array{"command"};
+    parameters["additionalProperties"] = false;
+
+    run_function["parameters"] = std::move(parameters);
+  }
+
   boost::json::array tools;
 
   if (capabilities.repo_read()) {
@@ -287,6 +322,10 @@ boost::json::array felis::bell::tool_definitions(const tool_capabilities& capabi
   if (capabilities.online()) {
     tools.emplace_back(chat_tool(std::move(fetch_function)));
     tools.emplace_back(chat_tool(std::move(web_search_function)));
+  }
+
+  if (capabilities.terminal()) {
+    tools.emplace_back(chat_tool(std::move(run_function)));
   }
 
   return tools;

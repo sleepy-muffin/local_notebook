@@ -748,7 +748,7 @@ void MessageActionsBar::set_message(const render::MessageMeta& meta) {
   copy_->setVisible(meta.role == render::Role::Assistant);
   edit_->setVisible(meta.editable);
   // "Go to previous prompt" only makes sense on a stored assistant reply.
-  previous_->setVisible(meta.role == render::Role::Assistant && meta.id != 0 && !meta.streaming);
+  previous_->setVisible((meta.role == render::Role::Assistant || meta.role == render::Role::Tool) && meta.id != 0 && !meta.streaming);
   // A branch needs a stored message to copy; a streaming reply has no id yet.
   branch_->setVisible(meta.id != 0 && !meta.streaming);
   remove_->setVisible(true);
@@ -825,6 +825,7 @@ struct TranscriptCanvas::Private {
     result.body = to_font(chat_font());
     result.mono = to_font(mono_font());
     result.inline_code_scale = inline_code_scale();
+    result.tool_font_scale = tool_text_scale();
 
     result.text = to_color(c.text);
     result.muted_text = to_color(c.text_muted);

@@ -624,7 +624,8 @@ void felis::bell::client::prompt(
           call,
           sess.shared_directories(),
           assistant_snapshot.proxy_,
-          caps);
+          caps,
+          stop);
 
         append_message(
           session_id, shadowed_message(tool_output, message_kind::tool_result, {call.id, call.name}));

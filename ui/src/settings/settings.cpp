@@ -112,6 +112,7 @@ QJsonObject to_json(const Settings& settings) {
   object["mono_font"] = QString::fromStdString(settings.mono_font);
   object["mono_font_size"] = settings.mono_font_size;
   object["inline_code_scale"] = static_cast<double>(settings.inline_code_scale);
+  object["tool_text_scale"] = static_cast<double>(settings.tool_text_scale);
 
   object["auto_login"] = settings.auto_login;
   object["enter_with_modifier"] = settings.enter_with_modifier;
@@ -163,6 +164,8 @@ Settings from_json(const QJsonObject& object) {
   settings.mono_font_size = object.value("mono_font_size").toInt(settings.mono_font_size);
   settings.inline_code_scale =
       static_cast<float>(object.value("inline_code_scale").toDouble(settings.inline_code_scale));
+  settings.tool_text_scale =
+      static_cast<float>(object.value("tool_text_scale").toDouble(settings.tool_text_scale));
 
   settings.auto_login = object.value("auto_login").toBool(settings.auto_login);
   settings.enter_with_modifier =
