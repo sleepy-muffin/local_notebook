@@ -13,6 +13,8 @@
 #include <algorithm>
 #include <cmath>
 
+#include "felis/log.hpp"
+
 namespace ui {
 
 namespace {
@@ -104,6 +106,14 @@ public:
 // application's previous style object is not deleted twice. The copy is made
 // through the style factory from the style's own key, which is the same key the
 // platform style was installed under.
+//
+// Breeze is deliberately not used even when it is the platform style. It paints
+// scrollbar grooves, add/sub-page areas and the scroll area corner from its own
+// palette instead of honouring a transparent stylesheet, which shows up as solid
+// black strips in the text areas. Fusion stays palette- and stylesheet-driven,
+// so every surface the application paints by hand remains in control of its own
+// chrome. The application's palette is built from the installed style below, and
+// `apply_theme()` still overwrites every role it cares about.
 QStyle* clone_platform_style(QStyle* current) {
   if (current == nullptr) {
     return nullptr;
@@ -113,6 +123,17 @@ QStyle* clone_platform_style(QStyle* current) {
 
   if (key.isEmpty()) {
     return nullptr;
+  }
+
+  if (key.compare(QStringLiteral("Breeze"), Qt::CaseInsensitive) == 0) {
+    if (QStyle* fusion = QStyleFactory::create(QStringLiteral("Fusion"))) {
+      felis::log::info(
+          "the platform style '{}' paints its own scrollbar tracks opaquely; "
+          "using Fusion instead so the theme controls every surface",
+          key.toStdString()
+      );
+      return fusion;
+    }
   }
 
   return QStyleFactory::create(key);

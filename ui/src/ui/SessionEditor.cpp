@@ -24,6 +24,7 @@
 #include "message.hpp"
 #include "support/KnownModels.hpp"
 #include "support/i18n.hpp"
+#include "ui/ScrollBar.hpp"
 #include "ui/SpinBox.hpp"
 #include "ui/dialog_style.hpp"
 
@@ -159,6 +160,7 @@ QWidget* SessionEditor::scrolled_tab(QWidget* content) {
   scroll->setFrameShape(QFrame::NoFrame);
   scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
   scroll->setWidget(content);
+  install_scroll_bars(scroll, ScrollBarTrack::Window);
   return scroll;
 }
 
@@ -273,6 +275,7 @@ QWidget* SessionEditor::build_instructions_tab() {
   // sitting in a form so a long set of instructions stays readable.
   instructions_ = new QPlainTextEdit();
   instructions_->setTabChangesFocus(true);
+  install_scroll_bars(instructions_, ScrollBarTrack::Window);
   instructions_->setPlaceholderText(trs(
       "Custom instructions for this session. Kept separate from the generated "
       "summary; never overwritten by it."
@@ -302,6 +305,7 @@ QWidget* SessionEditor::build_tools_tab() {
     shared_directories_ = new PlainTextEdit(content);
     shared_directories_->setPlaceholderText(trs("One directory per line"));
     shared_directories_->setMinimumHeight(120);
+    install_scroll_bars(shared_directories_, ScrollBarTrack::Window);
     layout->addWidget(shared_directories_);
   }
 

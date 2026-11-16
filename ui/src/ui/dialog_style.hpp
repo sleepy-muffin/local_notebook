@@ -105,15 +105,37 @@ inline QString dialog_stylesheet(const QString& object_name) {
                "QScrollArea { border: none; }"
                "QScrollArea > QWidget > QWidget { background: transparent; }");
 
+  // Scrollbars carry only their handle. Breeze would otherwise fill the groove,
+  // the add/sub-page areas and the scroll area corner from its own palette, which
+  // reads as an opaque black strip inside a text area whose field is transparent.
+  // The dialogs also replace their bars with ui::ScrollBar (which paints the
+  // track itself), but this rule covers every bar the platform creates on its
+  // own — popup views, spin boxes, and any area added later.
+  sheet += QStringLiteral(
+               "QScrollBar { background: transparent; border: none; }"
+               "QScrollBar::groove:vertical, QScrollBar::groove:horizontal {"
+               "  background: transparent; border: none; }"
+               "QScrollBar::handle:vertical, QScrollBar::handle:horizontal {"
+               "  background: %1; border-radius: 5px; min-height: 24px; min-width: 24px; }"
+               "QScrollBar::add-line, QScrollBar::sub-line {"
+               "  background: transparent; border: none; width: 0; height: 0; }"
+               "QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }"
+               "QAbstractScrollArea::corner { background: transparent; }")
+               .arg(border);
+
+  // Fields are underlines, not boxes: the value sits directly on the dialog
+  // canvas and a single hairline carries the field, brightening to the accent on
+  // focus. No fill and no surrounding frame, matching the application form.
   sheet += QStringLiteral(
                "QLineEdit, QPlainTextEdit, QSpinBox, QDoubleSpinBox, QComboBox {"
-               "  background: %1; border: 1px solid %2; border-radius: 6px;"
-               "  padding: 5px 8px; selection-background-color: %3; selection-color: %4; }")
-               .arg(base, border, accent, accent_text);
+               "  background: transparent; border: none;"
+               "  border-bottom: 1px solid %1; border-radius: 0;"
+               "  padding: 4px 2px; selection-background-color: %2; selection-color: %3; }")
+               .arg(border, accent, accent_text);
   sheet += QStringLiteral(
                "QLineEdit:focus, QPlainTextEdit:focus, QSpinBox:focus, "
                "QDoubleSpinBox:focus, QComboBox:focus {"
-               "  border: 1px solid %1; }")
+               "  border-bottom: 1px solid %1; }")
                .arg(accent);
 
   // The drop-down area is part of the field, not a second button: no fill, no
@@ -126,13 +148,10 @@ inline QString dialog_stylesheet(const QString& object_name) {
                "  subcontrol-origin: padding; subcontrol-position: top right;"
                "  width: 20px; border: none; background: transparent; }");
 
-  // A combo the user types into is not a filled field: the text itself is the
-  // value, and the chevron is its only chrome. `:editable` on the parent also
-  // leaves the internal QLineEdit drawn, so that child is cleared explicitly.
+  // An editable combo draws its text through an internal QLineEdit. That child
+  // must not add a second underline below the one the combo already owns.
   sheet += QStringLiteral(
-      "QComboBox:editable, QComboBox:editable:focus {"
-      "  background: transparent; border: 1px solid transparent; }"
-      "QComboBox > QLineEdit {"
+      "QComboBox > QLineEdit, QComboBox > QLineEdit:focus {"
       "  background: transparent; border: none; padding: 0; }");
 
   // The popup is a QListView inside a frame; give it the dialog's own surface so

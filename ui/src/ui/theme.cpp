@@ -280,17 +280,22 @@ QString build_stylesheet() {
 
   sheet += QStringLiteral("QWidget { color: %1; }").arg(rgba(c.text));
 
+  // Fields are underlines, not boxes: the value sits directly on the surface and
+  // a single hairline carries the field, brightening to the accent on focus. No
+  // fill and no surrounding frame, so a form reads as text on the page rather
+  // than a grid of framed cells.
   sheet += QStringLiteral(
                "QLineEdit, QPlainTextEdit, QSpinBox, QDoubleSpinBox, QComboBox {"
-               "  background: %1; border: 1px solid %2; border-radius: 6px;"
-               "  padding: 4px 6px; selection-background-color: %3;"
-               "  selection-color: %4; }")
-               .arg(rgba(c.base), rgba(c.border), rgba(c.accent), rgba(c.accent_text));
+               "  background: transparent; border: none;"
+               "  border-bottom: 1px solid %1; border-radius: 0;"
+               "  padding: 4px 2px; selection-background-color: %2;"
+               "  selection-color: %3; }")
+               .arg(rgba(c.border), rgba(c.accent), rgba(c.accent_text));
 
   sheet += QStringLiteral(
                "QLineEdit:focus, QPlainTextEdit:focus, QSpinBox:focus, "
                "QDoubleSpinBox:focus, QComboBox:focus {"
-               "  border: 1px solid %1; }")
+               "  border-bottom: 1px solid %1; }")
                .arg(rgba(c.accent));
 
   // The drop-down area is part of the field, not a second button: no fill, no
@@ -303,13 +308,10 @@ QString build_stylesheet() {
       "  subcontrol-origin: padding; subcontrol-position: top right;"
       "  width: 20px; border: none; background: transparent; }");
 
-  // A combo the user types into is not a filled field: the text itself is the
-  // value, and the chevron is its only chrome. `:editable` on the parent also
-  // leaves the internal QLineEdit drawn, so that child is cleared explicitly.
+  // An editable combo draws its text through an internal QLineEdit. That child
+  // must not add a second underline below the one the combo already owns.
   sheet += QStringLiteral(
-      "QComboBox:editable, QComboBox:editable:focus {"
-      "  background: transparent; border: 1px solid transparent; }"
-      "QComboBox > QLineEdit {"
+      "QComboBox > QLineEdit, QComboBox > QLineEdit:focus {"
       "  background: transparent; border: none; padding: 0; }");
 
   // A combo popup is a QListView inside a frame. The app-wide

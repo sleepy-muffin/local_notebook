@@ -23,6 +23,7 @@
 #include "store.hpp"
 #include "support/i18n.hpp"
 #include "ui/AssistantForm.hpp"
+#include "ui/ScrollBar.hpp"
 #include "ui/SpinBox.hpp"
 #include "ui/dialog_style.hpp"
 #include "ui/theme.hpp"
@@ -160,6 +161,9 @@ QWidget* SettingsWindow::make_page(
   scroll->setWidgetResizable(true);
   scroll->setFrameShape(QFrame::NoFrame);
   scroll->setWidget(content);
+  // Replace the platform bars: their tracks are painted from the style's own
+  // palette, which shows as an opaque strip against the dialog canvas.
+  install_scroll_bars(scroll, ScrollBarTrack::Window);
   layout->addWidget(scroll, 1);
 
   return page;
@@ -387,6 +391,9 @@ QWidget* SettingsWindow::build_assistant_page() {
   layout->addWidget(section_label(content, trs("Assistant memory")));
   assistant_memory_ = new PlainTextEdit(content);
   assistant_memory_->setMinimumHeight(120);
+  // The text area keeps the dialog canvas behind it, so its bars must paint the
+  // same colour rather than the platform's opaque track.
+  install_scroll_bars(assistant_memory_, ScrollBarTrack::Window);
   layout->addWidget(assistant_memory_);
 
   auto* actions = new QHBoxLayout();
