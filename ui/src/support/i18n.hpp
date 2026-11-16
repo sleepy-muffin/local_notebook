@@ -21,25 +21,32 @@ namespace lnb::i18n {
 
 enum class Language {
   English,
+  ChineseSimplified,
   ChineseTraditional,
   Japanese,
+  German,
 };
 
 // The languages offered in the Configuration page, in presentation order.
 constexpr Language kLanguages[] = {
     Language::English,
+    Language::ChineseSimplified,
     Language::ChineseTraditional,
     Language::Japanese,
+    Language::German,
 };
 
-// "en_us" / "zh_cn" / "ja_jp". Unknown codes fall back to English, so a
-// hand-edited settings.json can never leave the UI in an undefined state. The
-// bare legacy codes ("en", "zh", "ja") are still accepted and normalised, so
-// a settings file written by an older build keeps its language.
+// Locale-style codes: "en_us" / "zh_cn" (Simplified) / "zh_tw" (Traditional) /
+// "ja_jp" / "de_de". Unknown codes fall back to English, so a hand-edited
+// settings.json can never leave the UI in an undefined state. The bare legacy
+// codes ("en", "zh", "ja", "de") and the script codes ("zh_hans", "zh_hant",
+// "zh_hk") are still accepted and normalised, so a settings file written by an
+// older build keeps its language.
 Language language_from_code(std::string_view code);
 std::string_view code_from_language(Language language);
 
-// The language's own name, shown in the selector: "English", "繁體中文", "日本語".
+// The language's own name, shown in the selector: "English", "简体中文",
+// "繁體中文", "日本語", "Deutsch".
 QString language_name(Language language);
 
 // The active UI language. Set once from the stored settings at startup (and

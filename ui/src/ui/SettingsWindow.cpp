@@ -459,7 +459,7 @@ void SettingsWindow::reload_from_app() {
   }
 
   // A stored language may predate the locale-style codes ("zh" instead of
-  // "zh_cn"); normalise it so the selector matches the active language.
+  // "zh_cn"/"zh_tw"); normalise it so the selector matches the active language.
   const QString language_code = to_qstring(lnb::i18n::code_from_language(
       lnb::i18n::language_from_code(settings_.language)
   ));
