@@ -22,6 +22,7 @@
 
 #include "client.hpp"
 #include "message.hpp"
+#include "support/KnownModels.hpp"
 #include "support/i18n.hpp"
 #include "ui/SpinBox.hpp"
 #include "ui/dialog_style.hpp"
@@ -177,8 +178,10 @@ QWidget* SessionEditor::build_common_tab() {
 
     reasoning_ = new ComboBox(content);
     reasoning_->setEditable(true);
-    reasoning_->addItems({QStringLiteral("none"), QStringLiteral("low"),
-                          QStringLiteral("medium"), QStringLiteral("high")});
+    for (const std::string& level:
+         known_models::reasoning_levels(api_.current_assistant().model_)) {
+      reasoning_->addItem(to_qstring(level));
+    }
     reasoning_->setToolTip(trs("The reasoning level this session requests for chat turns."));
 
     // The reasoning level used when this session's inline summary is regenerated.
@@ -186,8 +189,10 @@ QWidget* SessionEditor::build_common_tab() {
     // summarise at a lower effort (usually "none") and still emit visible text.
     summary_reasoning_ = new ComboBox(content);
     summary_reasoning_->setEditable(true);
-    summary_reasoning_->addItems({QStringLiteral("none"), QStringLiteral("low"),
-                                  QStringLiteral("medium"), QStringLiteral("high")});
+    for (const std::string& level:
+         known_models::reasoning_levels(api_.current_assistant().model_)) {
+      summary_reasoning_->addItem(to_qstring(level));
+    }
     summary_reasoning_->setToolTip(trs(
         "The reasoning level used when this session's summary is updated. "
         "Chat turns are unaffected."
@@ -195,7 +200,7 @@ QWidget* SessionEditor::build_common_tab() {
 
     form->addRow(field_label(content, trs("Title")), title_);
     form->addRow(field_label(content, trs("Reasoning")), reasoning_);
-    form->addRow(field_label(content, trs("Summarization reasoning")), summary_reasoning_);
+    form->addRow(field_label(content, trs("Auto compact reasoning")), summary_reasoning_);
 
     layout->addLayout(form);
   }
@@ -327,7 +332,8 @@ QWidget* SessionEditor::build_tools_tab() {
 
 void SessionEditor::load_session() {
   if (session_id_ == 0) {
-    reasoning_->setCurrentText(QStringLiteral("medium"));
+    reasoning_->setCurrentText(
+        to_qstring(known_models::default_reasoning(api_.current_assistant().model_)));
     summary_reasoning_->setCurrentText(QStringLiteral("none"));
     return;
   }

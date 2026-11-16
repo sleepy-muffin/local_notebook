@@ -34,7 +34,7 @@ private:
   bool eventFilter(QObject* watched, QEvent* event) override;
 
   QLineEdit* name_ = nullptr;
-  QLineEdit* model_ = nullptr;
+  QComboBox* model_ = nullptr;
   QLineEdit* api_url_ = nullptr;
   QLineEdit* token_ = nullptr;
   QLineEdit* proxy_ = nullptr;

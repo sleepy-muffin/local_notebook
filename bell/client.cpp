@@ -1,15 +1,19 @@
 #include "common.hpp"
+#include "felis/sync.hpp"
 #include "store.hpp"
 #include "tools.hpp"
 #include "felis/log.hpp"
 #include "felis/str.hpp"
 #include "message.hpp"
+#include <boost/json/object.hpp>
 #include <iostream>
 #include <algorithm>
+#include <mutex>
 #include <set>
 #include <string_view>
 #include <cstdio>
 #include <ctime>
+#include <unordered_set>
 #include <utility>
 
 #include <boost/json/parse.hpp>
@@ -536,12 +540,35 @@ felis::bell::size_type felis::bell::client::begin_turn(
       session_id, shadowed_message(prompt_text, message_kind::user_prompt));
 }
 
+// See, your proposal does not work as expected, at least you need to prevent "escape".
+static std::string build_custom_instructions(
+  const std::string& session_custom_instructions,
+  const std::string& assistant_custom_instructions,
+  const std::string& assistant_memory
+)
+{
+  boost::json::object entry;
+  entry["session_custom_instructions"] = session_custom_instructions;
+  entry["assistant_custom_instructions"] = assistant_custom_instructions;
+  entry["assistant_memory"] = assistant_memory;
+  std::string result = boost::json::serialize(entry);
+
+  return result;
+}
+
+
 void felis::bell::client::prompt(
     std::stop_token stop,
     size_type session_id,
     size_type user_message_id,
     const prompt_events& events,
     const std::function<std::vector<std::string>()>& take_steering) {
+
+  static felis::synchronized<
+    std::unordered_map<felis::bell::size_type::_Size_Type, std::mutex>
+  > _session_id_locks;
+  auto _session_lock =
+    std::lock_guard<std::mutex>((*_session_id_locks.lock())[session_id.get()]);
 
   std::optional<session> loaded = db_->get_session(session_id);
   if (!loaded.has_value()) {
@@ -657,7 +684,10 @@ void felis::bell::client::prompt(
     const std::vector<shadowed_message> msgs = request_messages(session_id, false);
 
     const auto payload = build_responses_request(
-      sess.custom_instructions(),
+      build_custom_instructions(
+        sess.custom_instructions(),
+        assistant_snapshot.custom_instructions_,
+        assistant_snapshot.memory_),
       msgs,
       assistant_snapshot.model_,
       sess.reasoning_effort(),
@@ -685,6 +715,11 @@ void felis::bell::client::prompt(
     main_cbs.on_reasoning = [&](std::string_view delta) {
       if (events.on_reasoning) events.on_reasoning(delta);
     };
+    std::string serialized_payload = boost::json::serialize(payload);
+
+    if constexpr (LOCAL_NOTEBOOK_DEBUG) {
+      felis::log::info("{}\n{}", IDENTIFIER_LLM_PAYLOAD, serialized_payload);
+    }
 
     std::string request_error;
     std::optional<felis::net::llm::Result> result = stream_llm_request(
@@ -807,6 +842,9 @@ void felis::bell::client::prompt(
           sess.shared_directories(),
           assistant_snapshot.proxy_,
           caps,
+          assistant_snapshot.search_endpoint_.empty()
+          ? std::nullopt
+          : std::optional(assistant_snapshot.search_endpoint_),
           stop);
 
         append_message(

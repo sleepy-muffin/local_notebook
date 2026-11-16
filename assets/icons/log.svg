@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+  <!-- Log: the status bar's entry to the log inspector. A sheet with three rules,
+       read as a printed log. The outer rectangle and its inner cut-out are two
+       nested subpaths (even-odd), so the sheet is an outline rather than a filled
+       block. Straight lines only. Monochrome; recoloured at runtime. -->
+  <path fill-rule="evenodd" d="M4 3 L20 3 L20 21 L4 21 Z M6 5 L18 5 L18 19 L6 19 Z M8 8 L16 8 L16 10 L8 10 Z M8 12 L16 12 L16 14 L8 14 Z M8 16 L13 16 L13 18 L8 18 Z" fill="#000000"/>
+</svg>

@@ -22,6 +22,7 @@
 
 #include <cstddef>
 #include <string>
+#include <string_view>
 
 #include "ui/SpinBox.hpp"
 #include "ui/theme.hpp"
@@ -29,6 +30,10 @@
 namespace ui::dialog_style {
 
 inline QString to_qstring(const std::string& value) {
+  return QString::fromUtf8(value.data(), static_cast<qsizetype>(value.size()));
+}
+
+inline QString to_qstring(std::string_view value) {
   return QString::fromUtf8(value.data(), static_cast<qsizetype>(value.size()));
 }
 
@@ -72,19 +77,9 @@ inline QString dialog_stylesheet(const QString& object_name) {
   sheet += QStringLiteral(
                "QListWidget#AssistantList, QListWidget#SettingsNav, QListWidget#SessionNav {"
                " border: none; outline: none; }");
-  // The assistant picker's rows use the same low-contrast hover/selection
-  // shading as the sidebar session list (see ui::row_hover_background /
-  // row_selected_background). Without these rules the QListWidget falls back to
-  // the platform's default highlight and tight, unpadded rows, which is what
-  // made the picker look raw next to the rest of the chrome.
-  sheet += QStringLiteral(
-               "QListWidget#AssistantList::item {"
-               "  padding: 8px 10px; border-radius: 6px; }");
-  sheet += QStringLiteral("QListWidget#AssistantList::item:hover { background: %1; }")
-               .arg(colour_hex(row_hover_background()));
-  sheet += QStringLiteral(
-               "QListWidget#AssistantList::item:selected { background: %1; color: %2; }")
-               .arg(colour_hex(row_selected_background()), text);
+  // The assistant picker's rows are painted by ui::AssistantRowDelegate, which
+  // draws the same low-contrast hover/selection shading as the sidebar's session
+  // list and sets the name and model in two different weights.
   // The settings window's left rail is the same kind of list. Without item rules
   // its entries collapse to the platform's minimal text rows, which reads as
   // tiny compared with the rest of the chrome; give them the shared row padding
@@ -120,6 +115,34 @@ inline QString dialog_stylesheet(const QString& object_name) {
                "QDoubleSpinBox:focus, QComboBox:focus {"
                "  border: 1px solid %1; }")
                .arg(accent);
+
+  // The drop-down area is part of the field, not a second button: no fill, no
+  // divider. The chevron itself is painted by ui::ComboBox / ui::FontComboBox
+  // from the palette (Qt's stylesheet engine draws no arrow for a styled
+  // drop-down), centred in the 20px column reserved below.
+  sheet += QStringLiteral(
+               "QComboBox { padding-right: 22px; }"
+               "QComboBox::drop-down {"
+               "  subcontrol-origin: padding; subcontrol-position: top right;"
+               "  width: 20px; border: none; background: transparent; }");
+
+  // A combo the user types into is not a filled field: the text itself is the
+  // value, and the chevron is its only chrome. `:editable` on the parent also
+  // leaves the internal QLineEdit drawn, so that child is cleared explicitly.
+  sheet += QStringLiteral(
+      "QComboBox:editable, QComboBox:editable:focus {"
+      "  background: transparent; border: 1px solid transparent; }"
+      "QComboBox > QLineEdit {"
+      "  background: transparent; border: none; padding: 0; }");
+
+  // The popup is a QListView inside a frame; give it the dialog's own surface so
+  // it is never transparent against the window behind it.
+  sheet += QStringLiteral(
+               "QComboBox QAbstractItemView {"
+               "  background: %1; border: 1px solid %2; border-radius: 6px;"
+               "  padding: 4px; outline: none;"
+               "  selection-background-color: %3; selection-color: %4; }")
+               .arg(base, border, accent, accent_text);
 
   sheet += QStringLiteral(
                "QPushButton#Primary { background: %1; color: %2; border: none;"

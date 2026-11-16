@@ -16,6 +16,7 @@
 #include "store.hpp"
 #include "felis/log.hpp"
 #include "settings/settings.hpp"
+#include "support/LogPayloadBridge.hpp"
 #include "support/i18n.hpp"
 #include "ui/AssistantPicker.hpp"
 #include "ui/MainWindow.hpp"
@@ -53,6 +54,10 @@ int main(int argc, char **argv) {
 
   QApplication::setWindowIcon(ui::application_icon());
   ui::install_wayland_toplevel_icon(app);
+
+  // Keep dumped LLM request bodies out of the log file from the very first
+  // record; the inspector renders whatever this captures.
+  ui::log_payload_bridge::install();
 
   const std::filesystem::path data_root = resolve_data_root(app.arguments());
   felis::log::info("data root: {}", data_root.string());

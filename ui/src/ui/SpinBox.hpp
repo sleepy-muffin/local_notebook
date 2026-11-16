@@ -15,10 +15,14 @@
 // their own minimum width (eliding a long current item instead), so no single
 // field can force a form wider than its viewport.
 
+#include <QAbstractItemView>
 #include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QFontComboBox>
+#include <QPainter>
+#include <QPalette>
 #include <QPlainTextEdit>
+#include <QPolygonF>
 #include <QSpinBox>
 #include <QWheelEvent>
 
@@ -39,6 +43,50 @@ namespace detail {
     QSize size = natural;
     size.setWidth(std::min(size.width(), width));
     return size;
+  }
+
+  // The framed stylesheets reserve this many pixels at a combo's right edge for
+  // the chevron; the painting below is centred in that column.
+  constexpr int kComboChevronColumn = 20;
+
+  inline QColor combo_chevron_colour(const QWidget *widget) {
+    const QPalette::ColorGroup group =
+        widget->isEnabled() ? QPalette::Active : QPalette::Disabled;
+
+    return widget->palette().color(group, QPalette::WindowText);
+  }
+
+  // Qt's stylesheet engine takes the drop-down subcontrol over as soon as a
+  // `QComboBox::drop-down` rule exists, and from then on it never asks the base
+  // style for the arrow: it only ever draws one when the sheet itself supplies a
+  // `::down-arrow` image. Because the themed drop-down is deliberately just a
+  // transparent column, the chevron has to be painted here instead.
+  inline void paint_combo_chevron(const QWidget *widget, QPainter &painter, bool open) {
+    const QColor colour = combo_chevron_colour(widget);
+
+    if (!colour.isValid()) {
+      return;
+    }
+
+    constexpr qreal kWidth = 7.0;
+    constexpr qreal kHeight = 3.6;
+
+    const qreal right = widget->width() - 1.0;
+    const QRectF area(
+        right - kComboChevronColumn + (kComboChevronColumn - kWidth) / 2.0,
+        widget->height() / 2.0 - kHeight / 2.0, kWidth, kHeight
+    );
+
+    const QPointF tip(area.center().x(), open ? area.top() : area.bottom());
+    const QPointF left(area.left(), open ? area.bottom() : area.top());
+    const QPointF end(area.right(), open ? area.bottom() : area.top());
+
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setBrush(Qt::NoBrush);
+    painter.setPen(QPen(colour, 1.3, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    painter.drawPolyline(QPolygonF({left, tip, end}));
+    painter.restore();
   }
 
 } // namespace detail
@@ -79,15 +127,27 @@ public:
   explicit ComboBox(QWidget *parent = nullptr) : QComboBox(parent) {
     setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
     setMinimumContentsLength(6);
-
-    setStyleSheet(
-        styleSheet() + QStringLiteral(
-                           "QComboBox::drop-down { width: 0px; border: none; }"
-                           "QComboBox::down-arrow { image: none; }"));
   }
 
 protected:
   void wheelEvent(QWheelEvent *event) override { event->ignore(); }
+
+  void paintEvent(QPaintEvent *event) override {
+    QComboBox::paintEvent(event);
+
+    QPainter painter(this);
+    detail::paint_combo_chevron(this, painter, view()->isVisible());
+  }
+
+  void showPopup() override {
+    QComboBox::showPopup();
+    update();
+  }
+
+  void hidePopup() override {
+    QComboBox::hidePopup();
+    update();
+  }
 };
 
 class FontComboBox : public QFontComboBox {
@@ -95,15 +155,27 @@ public:
   explicit FontComboBox(QWidget *parent = nullptr) : QFontComboBox(parent) {
     setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
     setMinimumContentsLength(6);
-
-    setStyleSheet(
-        styleSheet() + QStringLiteral(
-                           "QComboBox::drop-down { width: 0px; border: none; }"
-                           "QComboBox::down-arrow { image: none; }"));
   }
 
 protected:
   void wheelEvent(QWheelEvent *event) override { event->ignore(); }
+
+  void paintEvent(QPaintEvent *event) override {
+    QFontComboBox::paintEvent(event);
+
+    QPainter painter(this);
+    detail::paint_combo_chevron(this, painter, view()->isVisible());
+  }
+
+  void showPopup() override {
+    QFontComboBox::showPopup();
+    update();
+  }
+
+  void hidePopup() override {
+    QFontComboBox::hidePopup();
+    update();
+  }
 };
 
 class PlainTextEdit : public QPlainTextEdit {

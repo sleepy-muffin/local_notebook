@@ -1,6 +1,7 @@
 #include "ui/theme.hpp"
 
 #include "settings/settings.hpp"
+#include "ui/ChevronStyle.hpp"
 #include "felis/log.hpp"
 
 #include <QApplication>
@@ -292,6 +293,36 @@ QString build_stylesheet() {
                "  border: 1px solid %1; }")
                .arg(rgba(c.accent));
 
+  // The drop-down area is part of the field, not a second button: no fill, no
+  // divider. The chevron itself is painted by ui::ComboBox / ui::FontComboBox
+  // from the palette (Qt's stylesheet engine draws no arrow for a styled
+  // drop-down), centred in the 20px column reserved below.
+  sheet += QStringLiteral(
+      "QComboBox { padding-right: 22px; }"
+      "QComboBox::drop-down {"
+      "  subcontrol-origin: padding; subcontrol-position: top right;"
+      "  width: 20px; border: none; background: transparent; }");
+
+  // A combo the user types into is not a filled field: the text itself is the
+  // value, and the chevron is its only chrome. `:editable` on the parent also
+  // leaves the internal QLineEdit drawn, so that child is cleared explicitly.
+  sheet += QStringLiteral(
+      "QComboBox:editable, QComboBox:editable:focus {"
+      "  background: transparent; border: 1px solid transparent; }"
+      "QComboBox > QLineEdit {"
+      "  background: transparent; border: none; padding: 0; }");
+
+  // A combo popup is a QListView inside a frame. The app-wide
+  // `QListView { background: transparent; }` below would leave it invisible, so
+  // the popup gets its own raised surface explicitly — this is a descendant rule,
+  // so it wins over the plain `QListView` selector regardless of order.
+  sheet += QStringLiteral(
+               "QComboBox QAbstractItemView {"
+               "  background: %1; border: 1px solid %2; border-radius: 6px;"
+               "  padding: 4px; outline: none;"
+               "  selection-background-color: %3; selection-color: %4; }")
+               .arg(rgba(c.surface), rgba(c.border), rgba(c.accent), rgba(c.accent_text));
+
   sheet += QStringLiteral(
                "QPushButton {"
                "  background: %1; border: 1px solid %2; border-radius: 6px;"
@@ -359,6 +390,11 @@ QString build_stylesheet() {
 } // namespace
 
 void apply_theme(QApplication& app, const lnb::Settings& settings) {
+  // Replace the platform style before the palette and the stylesheet are built:
+  // its own standard palette is the starting point below, and the stylesheet is
+  // installed on top of whatever style is current.
+  install_chevron_style(app);
+
   ThemeState& current = state();
 
   const std::optional<QJsonObject> root = read_theme_root();

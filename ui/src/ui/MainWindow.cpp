@@ -28,8 +28,10 @@
 
 #include "client.hpp"
 #include "settings/settings.hpp"
+#include "support/KnownModels.hpp"
 #include "support/i18n.hpp"
 #include "ui/ConversationView.hpp"
+#include "ui/LogInspectorWindow.hpp"
 #include "ui/ScrollBar.hpp"
 #include "ui/SessionEditor.hpp"
 #include "ui/SessionItemDelegate.hpp"
@@ -121,6 +123,16 @@ void MainWindow::closeEvent(QCloseEvent* event) {
 }
 
 bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
+  if (watched == log_window_) {
+    const QEvent::Type type = event->type();
+
+    // The dialog is only hidden when closed, and the Hide event lands before
+    // isVisible() has settled; defer so the button reads the final state.
+    if (type == QEvent::Show || type == QEvent::Hide || type == QEvent::Close) {
+      QTimer::singleShot(0, this, [this]() { refresh_log_button(); });
+    }
+  }
+
   if (event->type() == QEvent::MouseMove) {
     auto* mouse = static_cast<QMouseEvent*>(event);
 
@@ -197,6 +209,21 @@ QWidget* MainWindow::build_status_bar() {
   layout->addWidget(sidebar_toggle_);
   layout->addStretch(1);
 
+  log_button_ = new QToolButton(bar);
+  log_button_->setObjectName(QStringLiteral("LogButton"));
+  log_button_->setToolButtonStyle(Qt::ToolButtonIconOnly);
+  log_button_->setAutoRaise(true);
+  log_button_->setCheckable(true);
+  log_button_->setFocusPolicy(Qt::NoFocus);
+  log_button_->setCursor(Qt::PointingHandCursor);
+  log_button_->setFixedSize(16, 16);
+  log_button_->setIconSize(QSize(12, 12));
+  log_button_->setToolTip(trs("Logs"));
+
+  connect(log_button_, &QToolButton::clicked, this, [this]() { toggle_log_inspector(); });
+
+  layout->addWidget(log_button_);
+
   return bar;
 }
 
@@ -248,6 +275,9 @@ void MainWindow::apply_window_style() {
           "QToolButton#SidebarToggle { background: transparent;"
           "  border: none; border-radius: 4px; padding: 0 4px; color: %2; }"
           "QToolButton#SidebarToggle:hover { background: %5; }"
+          "QToolButton#LogButton { background: transparent;"
+          "  border: none; border-radius: 4px; padding: 0 4px; color: %2; }"
+          "QToolButton#LogButton:hover { background: %5; }"
           "QFrame#CurrentUser { background: transparent; border: none;"
           "  border-top: 1px solid %3; }"
           "QListView#Sessions { border: none; outline: none; }"
@@ -314,6 +344,7 @@ void MainWindow::apply_window_style() {
   }
 
   refresh_sidebar_toggle();
+  refresh_log_button();
 }
 
 QListView* MainWindow::build_session_list(
@@ -698,6 +729,15 @@ void MainWindow::open_conversation(std::uint32_t session_id) {
 void MainWindow::new_session() {
   const felis::bell::size_type id =
       api_.create_session(felis::bell::shadowed_session(0, trs("New Session").toStdString()));
+
+  // The stored default ('none') only means "unset"; start a new session on the
+  // level its model prefers, the same default the assistant form and the
+  // composer's reasoning selector offer.
+  const std::string level = known_models::default_reasoning(api_.current_assistant().model_);
+  if (!level.empty()) {
+    api_.set_session_reasoning_effort(id, level);
+  }
+
   refresh_sessions();
   open_conversation(id.get());
   edit_session(id.get());
@@ -720,6 +760,25 @@ void MainWindow::open_settings() {
   settings_window_->show();
   settings_window_->raise();
   settings_window_->activateWindow();
+}
+
+void MainWindow::toggle_log_inspector() {
+  if (log_window_ == nullptr) {
+    log_window_ = new LogInspectorWindow(this);
+    // There is no Q_OBJECT on the window, so it cannot signal; watching its
+    // events lets the status-bar button follow show/hide/close instead.
+    log_window_->installEventFilter(this);
+  }
+
+  if (log_window_->isVisible()) {
+    log_window_->hide();
+  } else {
+    log_window_->show();
+    log_window_->raise();
+    log_window_->activateWindow();
+  }
+
+  refresh_log_button();
 }
 
 void MainWindow::pin_session(std::uint32_t session_id) {
@@ -803,6 +862,30 @@ void MainWindow::refresh_sidebar_toggle() {
   }
 
   sidebar_toggle_->setIcon(icon);
+}
+
+void MainWindow::refresh_log_button() {
+  if (log_button_ == nullptr) {
+    return;
+  }
+
+  const ThemeColors& c = theme().colors;
+  const bool visible = log_window_ != nullptr && log_window_->isVisible();
+  const QColor colour = visible ? c.accent : c.text_muted;
+  QIcon icon = resource_icon(QStringLiteral("log"), colour, colour);
+
+  if (icon.isNull()) {
+    icon = style()->standardIcon(QStyle::SP_FileDialogContentsView);
+  }
+
+  log_button_->setIcon(icon);
+  log_button_->setChecked(visible);
+
+  // No plate, no hover fill: the status bar stays quiet and only the glyph's
+  // tint (muted -> accent) says whether the inspector is up.
+  log_button_->setStyleSheet(QStringLiteral(
+      "QToolButton { background: transparent; border: none; padding: 0; }"
+  ));
 }
 
 void MainWindow::update_header() {

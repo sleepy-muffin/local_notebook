@@ -28,6 +28,7 @@ class client;
 namespace ui {
 
 class ConversationView;
+class LogInspectorWindow;
 class SessionItemDelegate;
 class SessionListModel;
 class SettingsWindow;
@@ -72,6 +73,9 @@ private:
 
   void new_session();
   void open_settings();
+  // Shows the single, lazily created log inspector window, hiding it again when
+  // it is already up. The status-bar button mirrors its visibility.
+  void toggle_log_inspector();
 
   void pin_session(std::uint32_t session_id);
   void edit_session(std::uint32_t session_id);
@@ -81,6 +85,7 @@ private:
 
   void toggle_sidebar();
   void refresh_sidebar_toggle();
+  void refresh_log_button();
 
   void update_header();
   void update_current_block();
@@ -122,6 +127,8 @@ private:
   SettingsWindow* settings_window_ = nullptr;
 
   QToolButton* sidebar_toggle_ = nullptr;
+  QToolButton* log_button_ = nullptr;
+  LogInspectorWindow* log_window_ = nullptr;
 
   std::uint32_t current_session_ = 0;
   std::unordered_map<std::uint32_t, ConversationView*> conversations_;

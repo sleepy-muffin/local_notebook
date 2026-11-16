@@ -182,9 +182,12 @@ QWidget* SettingsWindow::build_config_page() {
     }
 
     language_ = new ComboBox(content);
-    language_->addItem(QStringLiteral("English"), QStringLiteral("en"));
-    language_->addItem(QStringLiteral("\u4e2d\u6587"), QStringLiteral("zh"));
-    language_->addItem(QStringLiteral("\u65e5\u672c\u8a9e"), QStringLiteral("ja"));
+    for (const auto language: lnb::i18n::kLanguages) {
+      language_->addItem(
+          lnb::i18n::language_name(language),
+          to_qstring(lnb::i18n::code_from_language(language))
+      );
+    }
 
     form->addRow(field_label(content, trs("Theme")), theme_);
     form->addRow(field_label(content, trs("Language")), language_);
@@ -448,7 +451,12 @@ void SettingsWindow::reload_from_app() {
     theme_->setCurrentIndex(theme_index);
   }
 
-  const int lang_index = language_->findData(to_qstring(settings_.language));
+  // A stored language may predate the locale-style codes ("zh" instead of
+  // "zh_cn"); normalise it so the selector matches the active language.
+  const QString language_code = to_qstring(lnb::i18n::code_from_language(
+      lnb::i18n::language_from_code(settings_.language)
+  ));
+  const int lang_index = language_->findData(language_code);
   if (lang_index >= 0) {
     language_->setCurrentIndex(lang_index);
   }

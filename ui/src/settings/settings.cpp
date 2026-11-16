@@ -194,14 +194,15 @@ Settings from_json(const QJsonObject& object) {
 
 std::string default_language_code() {
   // Only the languages the translations cover are matched; everything else
-  // uses English.
+  // uses English. There is a single Chinese translation, and it is Traditional
+  // Chinese, so every Chinese locale maps to it.
   switch (QLocale::system().language()) {
   case QLocale::Chinese:
-    return "zh";
+    return "zh_cn";
   case QLocale::Japanese:
-    return "ja";
+    return "ja_jp";
   default:
-    return "en";
+    return "en_us";
   }
 }
 

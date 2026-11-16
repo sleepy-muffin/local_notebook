@@ -20,6 +20,7 @@ boost::json::array responses_tools(const felis::bell::tool_capabilities& capabil
 std::string execute_local_tool(
     const felis::net::llm::ToolCall& call, const std::vector<std::string>& shared_directories,
     const std::optional<std::string>& proxy, const felis::bell::tool_capabilities& permissions,
+    const std::optional<std::string> search_endpoint,
     std::stop_token stop = {}
 );
 

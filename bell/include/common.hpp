@@ -6,7 +6,13 @@
 #include <felis/log.hpp>
 
 namespace felis::bell {
+#ifndef LOCAL_NOTEBOOK_DEBUG
+#define LOCAL_NOTEBOOK_DEBUG (false)
+#endif
 
+// Marks a dumped LLM request body in the log stream: the identifier line, then
+// the serialised payload on the following lines.
+constexpr std::string_view IDENTIFIER_LLM_PAYLOAD = "local_notebook:llm_payload";
 
 enum class error_code : std::uint32_t {
   SUCCESS = 0,

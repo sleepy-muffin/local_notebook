@@ -31,6 +31,7 @@
 
 #include "client.hpp"
 #include "settings/settings.hpp"
+#include "support/KnownModels.hpp"
 #include "support/ReasoningText.hpp"
 #include "support/i18n.hpp"
 #include "ui/MessageDocument.hpp"
@@ -904,18 +905,20 @@ void ConversationView::refresh_reasoning_selector() {
     return;
   }
 
-  // The stored value may name a level the model no longer lists; the fixed ladder
-  // below is what the composer offers, and `set_levels` shows the stored value
-  // even if it falls outside that set.
+  // The stored value may name a level the model no longer lists; the model's
+  // ladder is what the composer offers, and `set_levels` shows the stored value
+  // even if it falls outside that set. An unset level starts on the model's
+  // default, the same one the assistant form offers.
   const std::optional<felis::bell::session> stored =
       api_.load_session(felis::bell::size_type(session_id_));
   std::string current = stored.has_value() ? stored->reasoning_effort() : std::string{};
+
+  const std::string model = api_.current_assistant().model_;
   if (current.empty()) {
-    current = "none";
+    current = known_models::default_reasoning(model);
   }
 
-  static const std::vector<std::string> kLevels{"none", "low", "medium", "high"};
-  std::vector<std::string> levels = kLevels;
+  std::vector<std::string> levels = known_models::reasoning_levels(model);
   if (std::find(levels.begin(), levels.end(), current) == levels.end()) {
     levels.push_back(current);
   }

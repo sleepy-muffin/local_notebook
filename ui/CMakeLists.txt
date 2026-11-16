@@ -20,13 +20,21 @@ add_subdirectory(render)
 set(LOCAL_NOTEBOOK_UI_SOURCES
         src/settings/settings.cpp
         src/support/i18n.cpp
+        src/support/LlmPayloadFormat.cpp
+        src/support/LogFormat.cpp
+        src/support/KnownModels.cpp
+        src/support/LogPayloadBridge.cpp
         src/support/ReasoningText.cpp
 
         src/ui/AssistantForm.cpp
         src/ui/AssistantPicker.cpp
+        src/ui/AssistantRowDelegate.cpp
         src/ui/BackgroundWidget.cpp
+        src/ui/ChevronStyle.cpp
         src/ui/ConversationController.cpp
         src/ui/ConversationView.cpp
+        src/ui/LogInspectorWindow.cpp
+        src/ui/LogRowDelegate.cpp
         src/ui/MainWindow.cpp
         src/ui/MessageDocument.cpp
         src/ui/ScrollBar.cpp
@@ -158,3 +166,18 @@ target_link_libraries(
 )
 
 add_test(NAME message-document COMMAND message-document-test)
+
+# Request payload rendering is pure text production, so it runs without a display
+# server and checks the elision of opaque reasoning blobs in particular.
+add_executable(
+        llm-payload-format-test
+        tests/llm_payload_format_test.cpp
+)
+
+target_link_libraries(
+        llm-payload-format-test
+        PRIVATE
+        local_notebook::ui
+)
+
+add_test(NAME llm-payload-format COMMAND llm-payload-format-test)

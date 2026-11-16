@@ -23,10 +23,11 @@ struct Settings {
 
   std::string theme = "Catppuccin Mocha";
 
-  // UI language code: "en", "zh" or "ja". Applied at startup (and on Save
-  // from the Configuration page); see support/i18n.hpp. This value is always
-  // explicit; a missing stored value is resolved through default_language_code().
-  std::string language = "en";
+  // UI language code: "en_us", "zh_cn" or "ja_jp". Applied at startup (and
+  // on Save from the Configuration page); see support/i18n.hpp. This value is
+  // always explicit; a missing stored value is resolved through
+  // default_language_code().
+  std::string language = "en_us";
 
   // Optional background image, resolved relative to the working directory.
   std::optional<std::string> background_url;
@@ -76,8 +77,8 @@ Settings load_settings(const felis::bell::store& store);
 void save_settings(const felis::bell::store& store, const Settings& settings);
 
 // The language to use before the user has chosen one, derived from the system
-// locale: "zh" for Chinese, "ja" for Japanese, and "en" otherwise. This is
-// also what "Restore to defaults" puts back in the language selector.
+// locale: "zh_cn" for Chinese, "ja_jp" for Japanese, and "en_us" otherwise.
+// This is also what "Restore to defaults" puts back in the language selector.
 std::string default_language_code();
 
 } // namespace lnb

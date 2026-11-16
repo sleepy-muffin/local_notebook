@@ -19,15 +19,15 @@
 #include "support/i18n.hpp"
 #include "settings/settings.hpp"
 #include "ui/AssistantForm.hpp"
+#include "ui/AssistantRowDelegate.hpp"
 #include "ui/dialog_style.hpp"
+#include "ui/theme.hpp"
 
 namespace ui {
 
 using namespace dialog_style;
 
 namespace {
-
-constexpr int k_uuid_role = Qt::UserRole + 1;
 
 // A small dialog wrapping AssistantForm, used by both "create" and "edit".
 // Validates the base URL before accepting so a broken endpoint is never saved.
@@ -112,7 +112,15 @@ AssistantPicker::AssistantPicker(
 
   list_ = new QListWidget(this);
   list_->setObjectName(QStringLiteral("AssistantList"));
-  list_->setSpacing(2);
+  list_->setFont(ui_font());
+  list_->setSpacing(1);
+  list_->setFrameShape(QFrame::NoFrame);
+  list_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+  list_->setWordWrap(false);
+  list_->setUniformItemSizes(true);
+  list_->setMouseTracking(true);
+  show_parent_background(list_);
+  list_->setItemDelegate(new AssistantRowDelegate(list_));
   root->addWidget(list_, 1);
 
   connect(list_, &QListWidget::itemSelectionChanged, this, [this]() { update_actions(); });
@@ -166,9 +174,10 @@ void AssistantPicker::refresh() {
                                                  : to_qstring(assistant.name_);
     const QString model = to_qstring(assistant.model_);
 
-    auto* item = new QListWidgetItem(
-        QStringLiteral("%1\n%2").arg(name, model), list_);
-    item->setData(k_uuid_role, to_qstring(uuid));
+    auto* item = new QListWidgetItem(list_);
+    item->setData(assistant_roles::name, name);
+    item->setData(assistant_roles::model, model);
+    item->setData(assistant_roles::uuid, to_qstring(uuid));
   }
 
   auto_login_->setChecked(settings_.auto_login);
@@ -176,7 +185,7 @@ void AssistantPicker::refresh() {
   const QString last = to_qstring(settings_.last_assistant);
   int target = -1;
   for (int row = 0; row < list_->count(); ++row) {
-    if (list_->item(row)->data(k_uuid_role).toString() == last) {
+    if (list_->item(row)->data(assistant_roles::uuid).toString() == last) {
       target = row;
       break;
     }
@@ -201,12 +210,12 @@ void AssistantPicker::update_actions() {
 
 QString AssistantPicker::selected_uuid() const {
   const QListWidgetItem* item = list_->currentItem();
-  return item != nullptr ? item->data(k_uuid_role).toString() : QString();
+  return item != nullptr ? item->data(assistant_roles::uuid).toString() : QString();
 }
 
 void AssistantPicker::select_uuid(const QString& uuid) {
   for (int row = 0; row < list_->count(); ++row) {
-    if (list_->item(row)->data(k_uuid_role).toString() == uuid) {
+    if (list_->item(row)->data(assistant_roles::uuid).toString() == uuid) {
       list_->setCurrentRow(row);
       return;
     }

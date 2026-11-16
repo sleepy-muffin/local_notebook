@@ -13,7 +13,9 @@
 #include <optional>
 #include <string>
 
+#include "support/KnownModels.hpp"
 #include "support/i18n.hpp"
+#include "ui/SpinBox.hpp"
 #include "ui/dialog_style.hpp"
 
 namespace ui {
@@ -43,11 +45,6 @@ constexpr SummaryPreset kSummaryPresets[] = {
     {"Very Heavy", 16'000, 48'000, 24'000},  //   1M window
 };
 
-// The reasoning levels offered for the chat and memory selectors. They are the
-// same fixed ladder for every model; a stored level absent from it is still
-// appended by rebuild_reasoning so it stays correctable.
-const char* kReasoningLevels[] = {"none", "low", "medium", "high"};
-
 } // namespace
 
 AssistantForm::AssistantForm(QWidget* parent) : QWidget(parent) {
@@ -64,8 +61,14 @@ AssistantForm::AssistantForm(QWidget* parent) : QWidget(parent) {
     name_ = new QLineEdit(this);
     name_->setPlaceholderText(trs("Assistant name"));
 
-    model_ = new QLineEdit(this);
-    model_->setPlaceholderText(trs("Model id, e.g. gpt-4o"));
+    model_ = new ComboBox(this);
+    model_->setEditable(true);
+    model_->setInsertPolicy(QComboBox::NoInsert);
+    for (const std::string& id: known_models::ids()) {
+      model_->addItem(to_qstring(id));
+    }
+    model_->setCurrentText(QString());
+    model_->lineEdit()->setPlaceholderText(trs("Model id, e.g. gpt-4o"));
 
     reasoning_ = new ComboBox(this);
     reasoning_->setEditable(true);
@@ -82,7 +85,7 @@ AssistantForm::AssistantForm(QWidget* parent) : QWidget(parent) {
     form->addRow(field_label(this, trs("API protocol")), protocol_);
     content->addLayout(form);
 
-    connect(model_, &QLineEdit::textChanged, this, [this](const QString&) {
+    connect(model_, &QComboBox::currentTextChanged, this, [this](const QString&) {
       rebuild_reasoning(reasoning_, reasoning_->currentText());
     });
   }
@@ -178,7 +181,7 @@ AssistantForm::AssistantForm(QWidget* parent) : QWidget(parent) {
 
 void AssistantForm::set_assistant(const felis::bell::assistant& assistant) {
   name_->setText(to_qstring(assistant.name_));
-  model_->setText(to_qstring(assistant.model_));
+  model_->setCurrentText(to_qstring(assistant.model_));
 
   rebuild_reasoning(reasoning_, to_qstring(assistant.reasoning_effort_));
 
@@ -208,7 +211,7 @@ void AssistantForm::write_into(felis::bell::assistant& assistant) const {
   }
 
   assistant.authentication_token_ = token_->text().trimmed().toStdString();
-  assistant.model_ = model_->text().trimmed().toStdString();
+  assistant.model_ = model_->currentText().trimmed().toStdString();
   assistant.api_url_ = api_url_->text().trimmed().toStdString();
 
   assistant.protocol_ =
@@ -250,15 +253,17 @@ void AssistantForm::rebuild_reasoning(QComboBox* combo, const QString& preferred
   }
 
   const QString wanted = preferred.trimmed();
-  const QString target = wanted.isEmpty() ? QStringLiteral("medium") : wanted;
+  const std::string model = model_->currentText().toStdString();
+  const QString target =
+      wanted.isEmpty() ? to_qstring(known_models::default_reasoning(model)) : wanted;
 
   const QSignalBlocker blocker(combo);
   combo->clear();
 
   int selected = 0;
   bool present = false;
-  for (const char* level: kReasoningLevels) {
-    const QString text = QString::fromLatin1(level);
+  for (const std::string& level: known_models::reasoning_levels(model)) {
+    const QString text = to_qstring(level);
     combo->addItem(text);
     if (QString::compare(text, target, Qt::CaseInsensitive) == 0) {
       selected = combo->count() - 1;

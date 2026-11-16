@@ -480,6 +480,7 @@ std::string describe_command_result(
 std::string felis::bell::execute_local_tool(
     const felis::net::llm::ToolCall& call, const std::vector<std::string>& shared_directories,
     const std::optional<std::string>& proxy, const felis::bell::tool_capabilities& permissions,
+    const std::optional<std::string> search_endpoint,
     std::stop_token stop
 ) {
   try {
@@ -684,10 +685,10 @@ std::string felis::bell::execute_local_tool(
       return felis::bell::fetch_url(url, proxy);
     }
 
-    // if (call.name == "web_search") {
-    //   const std::string query = json_string_or(args, "query");
-    //   return felis::bell::web_search(query, proxy, permissions.online());
-    // }
+    if (call.name == "web_search" && search_endpoint.has_value()) {
+      const std::string query = json_string_or(args, "query");
+      return felis::bell::web_search(query, proxy, search_endpoint.value());
+    }
 
 
     throw std::runtime_error("Unknown tool: " + call.name);

@@ -62,6 +62,25 @@ if(MSVC)
     add_compile_options(/bigobj)
 endif()
 
+# Debug-only diagnostics (request-body dumps and the like). The configure presets
+# set the cache variable, so `linux-x64-debug` turns it on and a plain build stays
+# quiet. The macro is named `LOCAL_NOTEBOOK_DEBUG` rather than `_DEBUG` on
+# purpose: MSVC already defines `_DEBUG` for Debug configurations and uses it to
+# select the debug CRT, so claiming that name would conflate our switch with the
+# toolchain's.
+set(LOCAL_NOTEBOOK_DEBUG OFF CACHE BOOL
+    "Compile debug-only diagnostics into the binaries")
+if(LOCAL_NOTEBOOK_DEBUG)
+    add_compile_definitions(
+        LOCAL_NOTEBOOK_DEBUG=true
+        # felis guards its own diagnostics with `if constexpr (FELIS_DEBUG)` and
+        # defaults the macro to `false` unless something defines it first, so a
+        # command-line definition takes precedence. It is consumed by `if
+        # constexpr`, not `#if`, hence `true` rather than `1`.
+        # FELIS_DEBUG=true
+    )
+endif()
+
 
 # ========== ---------- ---------- ---------- ==========
 #                    SUB  DIRECTORIES
