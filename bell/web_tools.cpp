@@ -193,8 +193,7 @@ std::string searxng_error_message(const std::string& body, int status) {
     if (!message.empty()) {
       if (challenge) {
         return message +
-            " Run `python scripts/search_bridge.py solve` to clear the check, "
-            "then retry.";
+            " Clear the search service's verification check, then retry.";
       }
 
       return message;
@@ -579,9 +578,7 @@ std::string felis::bell::web_search(
   // set one instead of treating the tool as broken.
   if (trim(endpoint).empty()) {
     return "Web search is not configured. Ask the user to set the assistant's "
-        "Search endpoint to a running SearXNG-compatible service (for example "
-        "the bundled scripts/search_bridge.py at http://127.0.0.1:8873), then "
-        "retry.";
+        "Search endpoint to a running SearXNG-compatible service, then retry.";
   }
 
   try {

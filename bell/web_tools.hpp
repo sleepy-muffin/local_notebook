@@ -7,7 +7,7 @@
 namespace felis::bell{
 // struct SearchSettings {
 //   // The base URL of the SearXNG-compatible service, e.g.
-//   // "http://127.0.0.1:8873". Empty means the user has not configured search, so
+//   // "http://127.0.0.1:8080". Empty means the user has not configured search, so
 //   // web_search reports that instead of guessing an endpoint.
 //   std::string endpoint;
 // };

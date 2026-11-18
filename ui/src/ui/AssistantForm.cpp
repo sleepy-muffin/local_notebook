@@ -108,7 +108,7 @@ AssistantForm::AssistantForm(QWidget* parent) : QWidget(parent) {
     proxy_->setPlaceholderText(trs("Optional"));
 
     search_endpoint_ = new QLineEdit(this);
-    search_endpoint_->setPlaceholderText(QStringLiteral("http://127.0.0.1:8873"));
+    search_endpoint_->setPlaceholderText(QStringLiteral("http://127.0.0.1:8080"));
 
     turn_timeout_ = make_spin(this, 180);
     turn_timeout_->setRange(30, 3600);

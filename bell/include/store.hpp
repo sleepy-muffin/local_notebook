@@ -21,9 +21,9 @@ public:
   api_protocol protocol_ = api_protocol::responses;
 
   // Where web_search sends its queries: the base URL of a SearXNG-compatible
-  // service, e.g. "http://127.0.0.1:8873" for the bundled browser bridge
-  // (scripts/search_bridge.py). Empty means the user has not configured search;
-  // web_search then reports that to the model instead of failing.
+  // service, e.g. "http://127.0.0.1:8080" for a local SearXNG instance. Empty
+  // means the user has not configured search; web_search then reports that to
+  // the model instead of failing.
   std::string search_endpoint_;
 
   // Request windows, in seconds. A streaming turn may wait this long for the

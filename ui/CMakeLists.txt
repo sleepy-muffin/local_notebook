@@ -143,6 +143,9 @@ target_link_libraries(local_notebook_app
 target_compile_definitions(local_notebook_app
         PRIVATE
         ${LOCAL_NOTEBOOK_WAYLAND_ICON_DEFINITIONS}
+        # Keep the reported version in step with the one CMake owns, so the
+        # executable and the release artefacts never disagree.
+        LOCAL_NOTEBOOK_VERSION="${PROJECT_VERSION}"
 )
 
 set_target_properties(local_notebook_app PROPERTIES
