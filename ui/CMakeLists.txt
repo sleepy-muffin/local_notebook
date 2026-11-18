@@ -24,6 +24,7 @@ set(LOCAL_NOTEBOOK_UI_SOURCES
         src/support/LogFormat.cpp
         src/support/KnownModels.cpp
         src/support/LogPayloadBridge.cpp
+        src/support/OpenFailure.cpp
         src/support/ReasoningText.cpp
 
         src/ui/AssistantForm.cpp

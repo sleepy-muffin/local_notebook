@@ -1,11 +1,13 @@
 #include <QApplication>
 #include <QDialog>
+#include <QMessageBox>
 #include <QStandardPaths>
 #include <QStringList>
 
 #include <algorithm>
 #include <exception>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -17,6 +19,7 @@
 #include "felis/log.hpp"
 #include "settings/settings.hpp"
 #include "support/LogPayloadBridge.hpp"
+#include "support/OpenFailure.hpp"
 #include "support/i18n.hpp"
 #include "ui/AssistantPicker.hpp"
 #include "ui/MainWindow.hpp"
@@ -50,7 +53,7 @@ std::filesystem::path resolve_data_root(const QStringList &arguments) {
 int main(int argc, char **argv) {
   QApplication app(argc, argv);
   QApplication::setApplicationName(QStringLiteral("Local Notebook"));
-  QApplication::setApplicationVersion(QStringLiteral("0.1.0"));
+  QApplication::setApplicationVersion(QStringLiteral(LOCAL_NOTEBOOK_VERSION));
 
   QApplication::setWindowIcon(ui::application_icon());
   ui::install_wayland_toplevel_icon(app);
@@ -94,21 +97,66 @@ int main(int argc, char **argv) {
   // The turn runs on this shared executor; no task ever creates its own thread.
   felis::async::multi_executor<void()> executor(2);
 
-  try {
-    felis::bell::client client(std::move(store), uuid);
+  // Open the assistant, going back to the picker whenever the one we tried cannot
+  // be opened — typically because another instance already holds it. That refusal
+  // is a dialog, never a process exit: on Windows there is no console, so dying
+  // with a status code would look exactly like a crash.
+  std::optional<felis::bell::client> client;
+  bool ask = !reopen;
 
-    ui::MainWindow window(client, settings, executor);
-    window.show();
+  while (!client) {
+    if (ask) {
+      ui::AssistantPicker picker(store, settings);
 
-    const int code = app.exec();
+      if (picker.exec() != QDialog::Accepted) {
+        executor.shutdown();
+        return 0;
+      }
 
-    lnb::save_settings(client.get_store(), settings);
-    executor.shutdown();
-    felis::log::debug("local-notebook exited with code {}", code);
-    return code;
-  } catch (const std::exception &error) {
-    felis::log::error("cannot open assistant {}: {}", uuid, error.what());
-    executor.shutdown();
-    return 1;
+      uuid = settings.last_assistant;
+
+      if (uuid.empty()) {
+        executor.shutdown();
+        return 0;
+      }
+    }
+
+    ask = true;
+
+    std::string refusal;
+
+    try {
+      // `client` owns its store, so build a fresh one per attempt and keep the
+      // picker's copy usable for the next round.
+      felis::bell::client candidate(felis::bell::store(data_root), uuid);
+      const felis::bell::error_code opened = candidate.open_assistant();
+
+      if (opened == felis::bell::error_code::SUCCESS) {
+        client.emplace(std::move(candidate));
+        break;
+      }
+
+      refusal = ui::describe_open_failure(opened).toStdString();
+    } catch (const std::exception &error) {
+      refusal = error.what();
+    }
+
+    felis::log::error("cannot open assistant {}: {} Falling back to the picker.", uuid, refusal);
+
+    QMessageBox::critical(
+        nullptr,
+        ui::trs("Cannot open assistant"),
+        QString::fromStdString(refusal)
+    );
   }
+
+  ui::MainWindow window(*client, settings, executor);
+  window.show();
+
+  const int code = app.exec();
+
+  lnb::save_settings(client->get_store(), settings);
+  executor.shutdown();
+  felis::log::debug("local-notebook exited with code {}", code);
+  return code;
 }

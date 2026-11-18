@@ -28,6 +28,10 @@ enum class error_code : std::uint32_t {
   ERR_ASSISTANT_BUSY = 203,
   ERR_ASSISTANT_HAS_NOT_LOADED_YET = 204,
   ERR_ASSISTANT_OR_ANY_SESSION_BUSY = 205,
+  // The instance lock could not be taken: usually another process has the
+  // assistant open, but it can also be a filesystem error. The accompanying
+  // message always says which.
+  ERR_ASSISTANT_LOCK_FAILED = 206,
 
 
 };

@@ -72,11 +72,17 @@ public:
   client(client&&) = default;
   client& operator=(client&&) = default;
 
-  // The constructor should be guarded by try... catch
-  client(store store, const std::string& uuid): store_(std::move(store)), assistant_uuid_(uuid) {
-    open_assistant();
-  }
+  // A refusal — typically another process already holds it — is reported as an
+  // error code rather than an exception, so the caller can explain it and fall
+  // back to the picker. Opening still does real work (loading the assistant,
+  // opening its log and database), so it can throw on a broken store; guard the
+  // call if it cannot escape.
+  client(store store, const std::string& uuid): store_(std::move(store)), assistant_uuid_(uuid) {}
 
+  // Opens (or re-opens) the current assistant: loads it, takes its instance lock,
+  // points the log at its directory and opens its database. Returns
+  // `ERR_ASSISTANT_LOCK_FAILED` when another process has it open, leaving the
+  // client unopened; `SUCCESS` otherwise. The log carries the detail of a refusal.
   error_code open_assistant();
 
   void open_log(const std::string &uuid) {

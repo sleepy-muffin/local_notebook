@@ -578,16 +578,19 @@ felis::bell::error_code felis::bell::client::open_assistant() {
   std::unique_ptr<felis::legacy::instance_lock> filesystem_lock;
   if (!already_held) {
     filesystem_lock = std::make_unique<felis::legacy::instance_lock>();
-    std::string error;
-    if (!filesystem_lock->acquire(store_.assistant_lock(uuid), error)) {
-      felis::raise("cannot open assistant {}: {}", uuid, error);
-      // return std::unexpected(error_code::ERR_ASSISTANT_HAS_NOT_LOADED_YET);
+    std::string reason;
+    if (!filesystem_lock->acquire(store_.assistant_lock(uuid), reason)) {
+      // A refusal is ordinary: another instance may legitimately have this
+      // assistant open. Report it to the caller instead of throwing, so the GUI
+      // can explain it and let the user pick another assistant. The lock names the
+      // holding process and any filesystem error, so the log keeps the detail.
+      felis::log::error("cannot open assistant {}: {}", uuid, reason);
+      return error_code::ERR_ASSISTANT_LOCK_FAILED;
     }
   } else {
     filesystem_lock = std::move(assistant_state_->lock()->filesystem_lock_);
   }
 
-  // stop_worker();
   assistant_state_ = std::make_unique<felis::synchronized<assistant_state>>(
       requested, std::move(assistant), std::move(filesystem_lock));
 

@@ -175,6 +175,12 @@ constexpr Entry kTranslations[] = {
     {"There are no assistants yet. Create one to get started.", "還沒有助手。新建一個即可開始。", "还没有助手。新建一个即可开始。", "アシスタントがまだありません。作成して始めましょう。", "Es gibt noch keine Assistenten. Erstellen Sie einen, um zu beginnen."},
     {"Select an assistant on the left to see it here.", "在左側選擇一個助手以在此檢視。", "在左侧选择一个助手以在此查看。", "左側のアシスタントを選択するとここに表示されます。", "Wählen Sie links einen Assistenten aus, um ihn hier anzuzeigen."},
     {"Edit assistant", "編輯助手", "编辑助手", "アシスタントを編集", "Assistent bearbeiten"},
+    // Shown when the assistant could not be opened, usually because another
+    // instance already holds it. The detail stays in the log; these are the
+    // only two messages the dialog can carry.
+    {"Cannot open assistant", "無法開啟助手", "无法打开助手", "アシスタントを開けません", "Assistent kann nicht geöffnet werden"},
+    {"This assistant is already open in another Local Notebook instance. Close it there first, or open a different assistant.", "此助手已在另一個 Local Notebook 實例中開啟。請先在該處關閉，或選擇其他助手。", "此助手已在另一个 Local Notebook 实例中打开。请先在那里关闭，或选择其他助手。", "このアシスタントは別の Local Notebook インスタンスで開いています。そちらで閉じるか、別のアシスタントを選んでください。", "Dieser Assistent ist bereits in einer anderen Local Notebook-Instanz geöffnet. Schließe ihn dort zuerst oder wähle einen anderen Assistenten."},
+    {"The assistant could not be opened.", "無法開啟助手。", "无法打开助手。", "アシスタントを開けませんでした。", "Der Assistent konnte nicht geöffnet werden."},
     // Session editor.
     {"Edit Session", "編輯會話", "编辑会话", "セッションを編集", "Sitzung bearbeiten"},
     {"General", "通用", "通用", "一般", "Allgemein"},
@@ -201,7 +207,7 @@ constexpr Entry kTranslations[] = {
     {"Search online", "線上搜尋", "在线搜索", "オンライン検索", "Online suchen"},
     {"Allow web searches and fetching web pages.", "允許搜尋網路並獲取網頁。", "允许搜索网络并获取网页。", "ウェブ検索とページの取得を許可します。", "Websuchen und das Abrufen von Webseiten erlauben."},
     {"Search endpoint", "搜尋端點", "搜索端点", "検索エンドポイント", "Such-Endpunkt"},
-    {"Base URL of a SearXNG-compatible search service, e.g. the local browser bridge at http://127.0.0.1:8873. Leave empty to disable web search.", "相容 SearXNG 的搜尋服務的基礎 URL，例如位於 http://127.0.0.1:8873 的本地瀏覽器橋接。留空則禁用網路搜尋。", "兼容 SearXNG 的搜索服务的基础 URL，例如位于 http://127.0.0.1:8873 的本地浏览器桥接。留空则禁用网络搜索。", "SearXNG 互換の検索サービスのベース URL（例: http://127.0.0.1:8873 のローカルブラウザブリッジ）。空欄にするとウェブ検索を無効にします。", "Basis-URL eines SearXNG-kompatiblen Suchdienstes, z. B. der lokale Browser-Bridge unter http://127.0.0.1:8873. Leer lassen, um die Websuche zu deaktivieren."},
+    {"Base URL of a SearXNG-compatible search service, e.g. http://127.0.0.1:8080. Leave empty to disable web search.", "相容 SearXNG 的搜尋服務的基礎 URL，例如 http://127.0.0.1:8080。留空則禁用網路搜尋。", "兼容 SearXNG 的搜索服务的基础 URL，例如 http://127.0.0.1:8080。留空则禁用网络搜索。", "SearXNG 互換の検索サービスのベース URL（例: http://127.0.0.1:8080）。空欄にするとウェブ検索を無効にします。", "Basis-URL eines SearXNG-kompatiblen Suchdienstes, z. B. http://127.0.0.1:8080. Leer lassen, um die Websuche zu deaktivieren."},
     {"Tools", "工具", "工具", "ツール", "Tools"},
     {"Read", "讀取", "读取", "読み取り", "Lesen"},
     {"Write", "寫入", "写入", "書き込み", "Schreiben"},

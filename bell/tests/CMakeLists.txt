@@ -13,6 +13,21 @@ target_link_libraries(
 
 add_test(NAME request-shape COMMAND request-shape-check)
 
+# Two clients on one assistant: the second must refuse through `open_error()`
+# rather than throw or die. Needs a writable directory, nothing else.
+add_executable(
+    reopen-conflict-check
+    reopen_conflict_check.cpp
+)
+
+target_link_libraries(
+    reopen-conflict-check
+    PRIVATE
+    felis_bell
+)
+
+add_test(NAME reopen-conflict COMMAND reopen-conflict-check)
+
 # Live probe against a running OpenAI-compatible endpoint. Deliberately not an
 # `add_test`: the offline suite must not depend on a server being up.
 add_executable(

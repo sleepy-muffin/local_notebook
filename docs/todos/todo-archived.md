@@ -265,3 +265,14 @@ I will try to make this list ordered by time.
 
 - (Refinement) Application auto compact is restructured for easier use.
 - (Refinement) Chat Completions API implementation.
+
+- (Bug) Opening an assistant that another instance already has open crashed the
+  process. `client::open_assistant()` now returns `ERR_ASSISTANT_LOCK_FAILED`
+  with the lock's own explanation instead of throwing, and `main()` shows it in
+  a modal dialog and falls back to the assistant picker. Covered by the
+  `reopen-conflict` test.
+- (Refinement) Web search no longer pretends a bundled bridge exists: the
+  messages name only a SearXNG-compatible endpoint, and the settings placeholder
+  points at `http://127.0.0.1:8080`.
+- (Refinement) Version moved to 0.6.0, so the About page and the window report a
+  version instead of the long-stale 0.1.0.
