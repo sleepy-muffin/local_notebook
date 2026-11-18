@@ -798,8 +798,7 @@ void ConversationView::append_rendered_message(
       editable = false;
       const QString name =
           message.tool_call_.has_value() ? from_utf8(message.tool_call_->tool_name_) : QString();
-      title = name.isEmpty() ? trs("Tool call")
-                             : QStringLiteral("Tool call \u00b7 %1").arg(name);
+      title = name.isEmpty() ? trs("Tool call") : trs("Tool call · %1").arg(name);
       text = compact_line(text, 160);
       break;
     }
@@ -809,8 +808,7 @@ void ConversationView::append_rendered_message(
       editable = false;
       const QString name =
           message.tool_call_.has_value() ? from_utf8(message.tool_call_->tool_name_) : QString();
-      title = name.isEmpty() ? trs("Tool result")
-                             : QStringLiteral("Tool result \u00b7 %1").arg(name);
+      title = name.isEmpty() ? trs("Tool result") : trs("Tool result · %1").arg(name);
       const QString output = compact_line(text, 200);
       text = output.isEmpty() ? trs("(no output)") : output;
       break;
