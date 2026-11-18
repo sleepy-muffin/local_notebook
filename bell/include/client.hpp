@@ -35,6 +35,12 @@ struct prompt_events {
   std::function<void(std::string_view)> on_status;
   std::function<void()> on_message_begin;
   std::function<void(bool ok, std::string_view error)> on_done;
+  // Fires after one or more transcript rows were committed for this turn (an
+  // assistant tool call, a tool result). Runs on the worker thread *after* the
+  // INSERT, so a GUI can rebuild from the DB without racing the write. The
+  // tool-call emission lands before the tool executes, so the call is visible
+  // while it runs instead of only once the next model call starts.
+  std::function<void()> on_rows_appended;
   // Fires for every prompt steered into the running turn, with the id of the row
   // that now carries it. Emitted on the worker thread after the interrupted
   // request's own rows are stored, so the transcript order stays truthful.

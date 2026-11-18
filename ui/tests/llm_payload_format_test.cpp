@@ -59,6 +59,38 @@ bool renders_responses_request() {
   return true;
 }
 
+// A Chat Completions request: `messages` instead of `input`, a leading system
+// message, an assistant turn carrying `tool_calls`, and a `tool` reply quoting
+// its `tool_call_id`.
+bool renders_chat_request() {
+  const std::string body = R"({"model":"gpt-6.1-sol","messages":[{"role":"system","content":"You are helpful."},{"role":"user","content":"Read a.txt"},{"role":"assistant","content":"","tool_calls":[{"id":"call_9","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"a.txt\"}"}}]},{"role":"tool","tool_call_id":"call_9","content":"file contents here"}],"stream":true,"max_tokens":8000,"reasoning_effort":"medium","stream_options":{"include_usage":true},"tools":[{"type":"function","function":{"name":"read_file","description":"Reads a file","parameters":{"type":"object","properties":{"path":{"type":"string"}}}}}]})";
+
+  const std::string content = dump(body);
+
+  if (!ui::llm_payload::is_dump(content)) {
+    std::fprintf(stderr, "FAIL: chat payload dump was not recognised\n");
+    return false;
+  }
+
+  const std::string text = ui::llm_payload::render(content).toStdString();
+
+  const char* expected[] = {
+      "gpt-6.1-sol", "Messages", "system", "You are helpful.",
+      "assistant", "read_file", "tool_call_id=call_9", "tool",
+      "file contents here", "Parameters", "max_tokens", "reasoning_effort",
+      "Tools", "Reads a file", "Raw",
+  };
+
+  for (const char* needle : expected) {
+    if (text.find(needle) == std::string::npos) {
+      std::fprintf(stderr, "FAIL: rendered chat payload lacks %s\n", needle);
+      return false;
+    }
+  }
+
+  return true;
+}
+
 // A chat-completions reasoning model stores its thinking as typed
 // `reasoning_text` parts; the wording (not the JSON) must be shown.
 bool renders_readable_reasoning() {
@@ -111,8 +143,8 @@ int main() {
   using namespace payload_test;
 
   if (!is_plain_log() || !renders_responses_request() ||
-      !renders_readable_reasoning() || !titles_the_request() ||
-      !survives_malformed_json()) {
+      !renders_chat_request() || !renders_readable_reasoning() ||
+      !titles_the_request() || !survives_malformed_json()) {
     return 1;
   }
 

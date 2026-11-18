@@ -28,388 +28,14 @@
 
 #include "client.hpp"
 #include "application.hpp"
+#include "request.hpp"
 
 
 
 
-// A stored reasoning payload is only replayable when it carries the provider's
-// opaque `encrypted_content`. That blob is the only part a strict gateway can
-// decode back into the chain of thought, so an item without it is not worth the
-// input tokens: the Responses protocol has nothing to match it against. Models
-// that answer with a readable `summary` only (DeepSeek under this protocol) never
-// produce one, so their rows are kept for display but not replayed.
-//
-// Measured against the current gateway (2026-11-15): it accepts any reasoning
-// item -- empty blob, garbage blob, summary-only, even out of order -- with HTTP
-// 200 instead of rejecting it, and DeepSeek charges zero tokens for it. So this
-// is a correctness/token-hygiene guard, not a crash guard.
-[[nodiscard]] bool payload_has_replayable_reasoning(const std::string& payload) {
-  if (payload.empty()) {
-    return false;
-  }
-
-  boost::system::error_code ec;
-  const boost::json::value parsed = boost::json::parse(payload, ec);
-  if (ec || !parsed.is_object()) {
-    return false;
-  }
-
-  const boost::json::value* items = parsed.as_object().if_contains("reasoning_items");
-  if (items == nullptr || !items->is_array()) {
-    return false;
-  }
-
-  for (const boost::json::value& item : items->as_array()) {
-    if (!item.is_object()) {
-      continue;
-    }
-    const boost::json::value* encrypted =
-      item.as_object().if_contains("encrypted_content");
-    if (encrypted != nullptr && encrypted->is_string() && !encrypted->as_string().empty()) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-[[nodiscard]] boost::json::array build_input(
-  const std::vector<felis::bell::shadowed_message>& msgs
-) {
-  using namespace felis::bell;
-
-  boost::json::array input;
-
-  // Reasoning items are replayed by `id`; a later duplicate overwrites (here:
-  // is skipped) so the same reasoning item is never sent twice in one request.
-  std::set<std::string> replayed_reasoning_ids;
-
-  for (const shadowed_message& msg: msgs) {
-    switch (msg.kind_) {
-      case message_kind::user_prompt: {
-        boost::json::object entry;
-        entry["role"] = "user";
-        entry["content"] = msg.content_;
-        input.emplace_back(std::move(entry));
-        break;
-      }
-
-      case message_kind::assistant_output: {
-        // The assistant's own text is an ordinary message item; the calls it
-        // requested become sibling `function_call` items, matched by `call_id`.
-        boost::json::object entry;
-        entry["role"] = "assistant";
-        entry["content"] = msg.content_;
-        input.emplace_back(std::move(entry));
-        break;
-      }
-      case message_kind::assistant_tool_call: {
-        boost::json::object entry;
-        entry["type"]      = "function_call";
-        entry["call_id"]   = msg.tool_call_.value().tool_call_id_;
-        entry["name"]      = msg.tool_call_.value().tool_name_;
-        entry["arguments"] = msg.content_;   // raw JSON string from ToolCall::arguments
-        input.emplace_back(std::move(entry));
-        break;
-      }
-      case message_kind::tool_result: {
-        boost::json::object entry;
-        entry["type"] = "function_call_output";
-        entry["call_id"] = msg.tool_call_.value().tool_call_id_;
-        entry["output"] = msg.content_;
-        input.emplace_back(std::move(entry));
-        break;
-      }
-
-      case message_kind::inline_compact: {
-        // A folded summary of the compacted history. It sits at the head of the
-        // conversation (right after the instructions, before the live tail) and
-        // is replayed as an assistant turn so the model reads it as prior
-        // context rather than as a fresh user request.
-        boost::json::object entry;
-        entry["role"] = "assistant";
-        entry["content"] = msg.content_;
-        input.emplace_back(std::move(entry));
-        break;
-      }
-
-      case message_kind::assistant_reasoning_payload: {
-        // The reasoning item(s) a GPT/o-series response produced, carrying the
-        // opaque `encrypted_content` that lets the model resume its own
-        // chain-of-thought. Replayed verbatim as `type:"reasoning"` input items;
-        // because the row was inserted *before* the output/`function_call` items
-        // it belongs to, they land in the right position. A summary-only payload
-        // (DeepSeek) is stored for display but must not be sent back.
-        if (!msg.reasoning_payload_.has_value()
-            || !payload_has_replayable_reasoning(*msg.reasoning_payload_)) {
-          break;
-        }
-        boost::system::error_code ec;
-        const boost::json::value parsed = boost::json::parse(*msg.reasoning_payload_, ec);
-        if (ec || !parsed.is_object()) {
-          break;
-        }
-        const boost::json::value* items =
-          parsed.as_object().if_contains("reasoning_items");
-        if (items == nullptr || !items->is_array()) {
-          break;
-        }
-        for (const boost::json::value& item : items->as_array()) {
-          if (!item.is_object()) {
-            continue;
-          }
-          const boost::json::object& object = item.as_object();
-          const boost::json::value* encrypted = object.if_contains("encrypted_content");
-          if (encrypted == nullptr || !encrypted->is_string()
-              || encrypted->as_string().empty()) {
-            continue;
-          }
-          if (const boost::json::value* id = object.if_contains("id");
-              id != nullptr && id->is_string()) {
-            if (!replayed_reasoning_ids.insert(std::string(id->as_string())).second) {
-              continue;
-            }
-          }
-          input.emplace_back(boost::json::value(object));
-        }
-        break;
-      }
-
-      default: {
-        // `undefined` carries nothing to send here.
-        break;
-      }
-    }
-  }
-
-  return input;
-}
-
-[[nodiscard]] boost::json::object build_responses_request(
-  const std::string& custom_instructions,
-  const std::vector<felis::bell::shadowed_message>& msgs,
-  const std::string& model,
-  const std::string& reasoning_effort,
-  const felis::bell::tool_capabilities capabilities,
-  std::size_t max_output_tokens
-) {
-  boost::json::object payload;
-  payload["model"] = model;
-  payload["input"] = build_input(msgs);
-  payload["stream"] = true;
-
-  // The session's response budget caps how many tokens the model may produce for
-  // this request. Without it the provider falls back to its own default, which
-  // silently ignores the number the session editor shows. 0 disables the cap.
-  if (max_output_tokens > 0) {
-    payload["max_output_tokens"] = static_cast<std::int64_t>(max_output_tokens);
-  }
-
-  payload["tools"] = responses_tools(capabilities);
-
-  // The session's custom instructions are the top-level `instructions` field of a
-  // Responses request (Zed does the same: `responses.rs` `instructions:
-  // Option<String>`), not a message in `input`. Omit it when empty so the proxy
-  // does not receive an empty system prompt.
-  if (!custom_instructions.empty()) {
-    payload["instructions"] = custom_instructions;
-  }
-
-  // Do not ask the provider to store the response: this client keeps the whole
-  // transcript itself and replays it, so `store:false` mirrors Zed and avoids
-  // depending on server-side conversation state.
-  payload["store"] = false;
-
-  // Request reasoning at the session's chosen level. An empty string or "none"
-  // means "do not request reasoning" (the user turned it off, or the model does
-  // not reason), so the field is omitted rather than sent as "none" — some
-  // gateways reject an explicit "none" effort.
-  const bool reasoning_on = !reasoning_effort.empty() && reasoning_effort != "none";
-  if (reasoning_on) {
-    boost::json::object reasoning;
-    reasoning["effort"] = reasoning_effort;
-    payload["reasoning"] = std::move(reasoning);
-  }
-
-  // Ask for the opaque `encrypted_content` half of every reasoning item so it can
-  // be stored and replayed. Needed whenever reasoning is on, and also whenever the
-  // input already carries stored reasoning items (GPT/o-series): without it the
-  // provider strips `encrypted_content` from the round-trip and the next request's
-  // replayed reasoning item is rejected. Mirrors Zed's `include` decision.
-  bool has_stored_reasoning = false;
-  for (const felis::bell::shadowed_message& msg : msgs) {
-    if (msg.kind_ == felis::bell::message_kind::assistant_reasoning_payload
-        && msg.reasoning_payload_.has_value()
-        && payload_has_replayable_reasoning(*msg.reasoning_payload_)) {
-      has_stored_reasoning = true;
-      break;
-    }
-  }
-  if (reasoning_on || has_stored_reasoning) {
-    boost::json::array include;
-    include.emplace_back("reasoning.encrypted_content");
-    payload["include"] = std::move(include);
-  }
-
-  return payload;
-}
-
-// Builds the single request that folds the eligible history into a summary. It
-// carries no tools (the model must only summarize, never act) and a dedicated
-// instruction, and is capped by the session's compaction output budget.
-[[nodiscard]] boost::json::object build_compaction_request(
-  const std::string& summarizer_instructions,
-  const std::vector<felis::bell::shadowed_message>& msgs,
-  std::size_t max_output_tokens,
-  felis::bell::assistant ass,
-  const std::string& auto_compact_reasoning_effort
-) {
-  boost::json::object payload;
-  payload["model"] = ass.model_;
-
-  // Build the transcript to summarise, then append an explicit closing USER turn
-  // that asks for the summary. This is essential, not cosmetic: the eligible
-  // range almost always ends on a `function_call_output` (a tool result) — or an
-  // assistant turn — with no user message after it. A tool-result-tipped input
-  // makes the model believe the task is still in progress, so it *resumes the
-  // work* (emitting task-continuation text, or a bare "\n\n" once its reasoning
-  // budget is spent) instead of summarising. The `instructions` field alone does
-  // not override that continuation reflex. A trailing user instruction does:
-  // verified against the proxy, it turns a blank/task-continuation reply into a
-  // clean "## Conversation Summary".
-  // The summariser only needs the readable transcript, so drop the stored
-  // reasoning-item rows: replaying `encrypted_content` into a summarisation turn
-  // (usually run at `effort:"none"`) is pointless and some gateways reject a
-  // reasoning input item when reasoning is disabled.
-  std::vector<felis::bell::shadowed_message> readable;
-  readable.reserve(msgs.size());
-  for (const felis::bell::shadowed_message& msg : msgs) {
-    if (msg.kind_ != felis::bell::message_kind::assistant_reasoning_payload) {
-      readable.push_back(msg);
-    }
-  }
-
-  boost::json::array summary_input = build_input(readable);
-  {
-    boost::json::object closing_turn;
-    closing_turn["role"] = "user";
-    closing_turn["content"] =
-        "Summarize the entire conversation above as a running summary for "
-        "continuation. Output only the summary text \u2014 no preamble, no tool "
-        "calls, no questions.";
-    summary_input.emplace_back(std::move(closing_turn));
-  }
-  payload["input"] = std::move(summary_input);
-  payload["stream"] = true;
-  payload["instructions"] = summarizer_instructions;
-
-  if (max_output_tokens > 0) {
-    payload["max_output_tokens"] = static_cast<std::int64_t>(max_output_tokens);
-  }
-
-  // The summariser must not spend its output budget on hidden reasoning: a
-  // reasoning model that thinks through the whole budget replies with blank (or
-  // truncated) text, and `compact()`'s blank-summary guard then throws the whole
-  // compaction away, leaving nothing to render inline. Honour the session's
-  // dedicated summarisation reasoning level (`auto_compact_reasoning_effort`, default
-  // "none") so summarisation emits visible text instead of only thinking. This is
-  // a SESSION setting, not the assistant's: chat turns are unaffected, and the
-  // inline summary always runs on the same model as the chat.
-  if (!auto_compact_reasoning_effort.empty()) {
-    boost::json::object reasoning;
-    reasoning["effort"] = auto_compact_reasoning_effort;
-    payload["reasoning"] = std::move(reasoning);
-  }
-
-  return payload;
-}
-
-// Builds the single request that merges the assistant's memory. It carries no
-// tools (the model must only merge, never act), states the merge rules in
-// `instructions`, and ends with an explicit user turn asking for the result --
-// without that trailing turn a transcript tipped by an assistant reply makes the
-// model continue the conversation instead of writing the memory.
-[[nodiscard]] boost::json::object build_memory_request(
-  const std::string& current_memory,
-  const std::vector<felis::bell::session_summary>& summaries,
-  const std::vector<felis::bell::shadowed_message>& recent_messages,
-  std::size_t max_output_tokens,
-  const felis::bell::assistant& ass
-) {
-  boost::json::array input;
-
-  // The existing memory and each session's own summary form one context block:
-  // they are all background the model already knows, not turns to answer.
-  std::string context;
-  if (!current_memory.empty()) {
-    context += "## Current memory\n";
-    context += current_memory;
-    context += "\n\n";
-  }
-  for (const felis::bell::session_summary& summary : summaries) {
-    context += "## Session: " + summary.session_title_ + "\n";
-    context += summary.text_;
-    context += "\n\n";
-  }
-  if (!context.empty()) {
-    boost::json::object entry;
-    entry["role"] = "user";
-    entry["content"] = std::move(context);
-    input.emplace_back(std::move(entry));
-  }
-
-  // The newest conversation rows across sessions, in conversation order, so the
-  // model reads what happened after those summaries.
-  for (const felis::bell::shadowed_message& msg : recent_messages) {
-    boost::json::object entry;
-    entry["role"] = msg.kind_ == felis::bell::message_kind::user_prompt
-        ? "user"
-        : "assistant";
-    entry["content"] = msg.content_;
-    input.emplace_back(std::move(entry));
-  }
-
-  {
-    boost::json::object closing_turn;
-    closing_turn["role"] = "user";
-    closing_turn["content"] =
-        "Write the updated memory now: one compact Markdown note that keeps every "
-        "standing fact, decision, preference, open task and file path, drops small "
-        "talk and anything already stale, and merges duplicates. Output only the "
-        "memory text \u2014 no preamble, no tool calls, no questions.";
-    input.emplace_back(std::move(closing_turn));
-  }
-
-  boost::json::object payload;
-  payload["model"] = ass.model_;
-  payload["input"] = std::move(input);
-  payload["stream"] = true;
-  payload["store"] = false;
-  payload["instructions"] =
-      "You maintain the assistant's long-term memory: a short note carried into "
-      "every future session. You are given the memory as it stands, each session's "
-      "own summary, and the newest messages across sessions. Rewrite the memory so "
-      "it absorbs the new material without growing without bound; omit what is no "
-      "longer relevant. Never invent facts that are not in the material above.";
-
-  if (max_output_tokens > 0) {
-    payload["max_output_tokens"] = static_cast<std::int64_t>(max_output_tokens);
-  }
-
-  // An empty value or "none" means "do not request reasoning": the field is
-  // omitted rather than sent as "none", which some gateways reject (mirrors
-  // `build_responses_request`).
-  if (!ass.reasoning_effort_.empty() && ass.reasoning_effort_ != "none") {
-    boost::json::object reasoning;
-    reasoning["effort"] = ass.reasoning_effort_;
-    payload["reasoning"] = std::move(reasoning);
-  }
-
-  return payload;
-}
-
-// One streaming POST against the configured Responses endpoint. The decoded
-// deltas drive `callbacks`; on success the finished turn is returned, otherwise
+// One streaming POST against the assistant's configured endpoint. The payload
+// was already shaped for that endpoint's protocol; the decoded deltas drive
+// `callbacks`. On success the finished turn is returned, otherwise
 // `std::nullopt` (with the reason copied into `error_out`).
 [[nodiscard]] std::optional<felis::net::llm::Result> stream_llm_request(
   std::stop_token stop,
@@ -434,9 +60,12 @@
     headers.push_back({"Authorization", "Bearer " + ass.authentication_token_});
   }
 
+  const bool chat = ass.protocol_ == felis::bell::api_protocol::chat_completions;
+
   auto result = felis::net::llm::stream_request(
-    felis::net::llm::Protocol::Responses,
-    ass.api_url_ + "/responses",
+    chat ? felis::net::llm::Protocol::ChatCompletions
+         : felis::net::llm::Protocol::Responses,
+    ass.api_url_ + (chat ? "/chat/completions" : "/responses"),
     ass.proxy_,
     headers,
     body,
@@ -539,23 +168,6 @@ felis::bell::size_type felis::bell::client::begin_turn(
   return append_message(
       session_id, shadowed_message(prompt_text, message_kind::user_prompt));
 }
-
-// See, your proposal does not work as expected, at least you need to prevent "escape".
-static std::string build_custom_instructions(
-  const std::string& session_custom_instructions,
-  const std::string& assistant_custom_instructions,
-  const std::string& assistant_memory
-)
-{
-  boost::json::object entry;
-  entry["session_custom_instructions"] = session_custom_instructions;
-  entry["assistant_custom_instructions"] = assistant_custom_instructions;
-  entry["assistant_memory"] = assistant_memory;
-  std::string result = boost::json::serialize(entry);
-
-  return result;
-}
-
 
 void felis::bell::client::prompt(
     std::stop_token stop,
@@ -683,13 +295,13 @@ void felis::bell::client::prompt(
 
     const std::vector<shadowed_message> msgs = request_messages(session_id, false);
 
-    const auto payload = build_responses_request(
+    const auto payload = build_turn_request(
+      assistant_snapshot,
       build_custom_instructions(
         sess.custom_instructions(),
         assistant_snapshot.custom_instructions_,
         assistant_snapshot.memory_),
       msgs,
-      assistant_snapshot.model_,
       sess.reasoning_effort(),
       caps,
       sess.response_budget().get());
@@ -835,6 +447,11 @@ void felis::bell::client::prompt(
           session_id, shadowed_message(call.arguments, message_kind::assistant_tool_call, {call.id, call.name}));
       }
 
+      // The calls are stored but not yet run: tell the caller now so the strips
+      // are on screen while each tool blocks, rather than surfacing only when
+      // the next model call's `on_message_begin` rebuilds the transcript.
+      if (events.on_rows_appended) events.on_rows_appended();
+
       for (const auto& call : v->tool_calls) {
         if (events.on_status) events.on_status("Running " + call.name);
         std::string tool_output = felis::bell::execute_local_tool(
@@ -849,6 +466,10 @@ void felis::bell::client::prompt(
 
         append_message(
           session_id, shadowed_message(tool_output, message_kind::tool_result, {call.id, call.name}));
+
+        // Surface each result as it lands, so the strip replaces the running
+        // placeholder while the remaining calls (if any) continue.
+        if (events.on_rows_appended) events.on_rows_appended();
       }
     }
 

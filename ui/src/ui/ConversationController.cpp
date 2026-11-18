@@ -55,6 +55,10 @@ bool ConversationController::send(std::string text) {
     std::scoped_lock lock(state->mutex);
     state->events.push_back(event{event_kind::message_begin, std::string()});
   };
+  events.on_rows_appended = [state]() {
+    std::scoped_lock lock(state->mutex);
+    state->events.push_back(event{event_kind::rows_appended, std::string()});
+  };
   events.on_steered = [state](felis::bell::size_type id) {
     std::scoped_lock lock(state->mutex);
     event item{event_kind::steered, std::string()};
@@ -183,6 +187,15 @@ void ConversationController::poll() {
         // A new assistant message is starting: rebuild the transcript from the DB
         // so the previous message stays a separate bubble (its text is already
         // persisted) and the incoming deltas begin a fresh streaming bubble.
+        if (on_changed_) {
+          on_changed_();
+        }
+        break;
+      case event_kind::rows_appended:
+        // The worker stored a row (a tool call before it runs, or a result just
+        // after): rebuild so the strip appears while the work is still in
+        // flight. Anything already streamed for this request is persisted by
+        // now, so the reload cannot drop it.
         if (on_changed_) {
           on_changed_();
         }

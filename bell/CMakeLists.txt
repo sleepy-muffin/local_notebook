@@ -8,6 +8,7 @@ add_library(${PROJECT_NAME} STATIC
     message.cpp
     local_tools.cpp
     client.cpp
+    request.cpp
     store.cpp
     tools.cpp
     web_tools.cpp
@@ -25,3 +26,5 @@ target_link_libraries(${PROJECT_NAME}
         felis::net
         felis::sqlite3
 )
+
+add_subdirectory(tests)

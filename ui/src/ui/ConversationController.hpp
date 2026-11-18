@@ -103,7 +103,14 @@ public:
 
 private:
   enum class event_kind {
-    text, reasoning, status, message_begin, steered, done_ok, done_error
+    text,
+    reasoning,
+    status,
+    message_begin,
+    rows_appended,
+    steered,
+    done_ok,
+    done_error
   };
 
   struct event {

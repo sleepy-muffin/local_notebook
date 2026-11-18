@@ -35,12 +35,12 @@ public:
   // Marks `message_id` as folded into the summary `summary_id`: it stops being
   // replayed (compacted_at != 0) and records which summary absorbed it.
   void compact_message(size_type message_id, size_type summary_id) const;
-  std::vector<felis::bell::shadowed_message> all_not_compacted_messages(size_type session_id) const;
+  std::vector<shadowed_message> all_not_compacted_messages(size_type session_id) const;
   // The complete conversation, compacted rows and summaries included, oldest
   // first. Backs the transcript pane so the reader can scroll back to the actual
   // messages a summary folded away; the model request instead uses the compacted
   // view (`all_not_compacted_messages`).
-  std::vector<felis::bell::shadowed_message> all_messages(size_type session_id) const;
+  std::vector<shadowed_message> all_messages(size_type session_id) const;
   size_type message_session(size_type message_id) const;
   bool remove_message(size_type message_id) const;
   std::size_t remove_messages_from(size_type session_id, size_type message_id) const;
