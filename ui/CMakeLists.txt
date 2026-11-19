@@ -152,6 +152,62 @@ set_target_properties(local_notebook_app PROPERTIES
         OUTPUT_NAME "local_notebook-${PLATFORM}-${ARCH}"
 )
 
+# Windows needs two executable-level details the other platforms do not:
+#
+#   * A GUI subsystem image. `add_executable` with no `WIN32_EXECUTABLE` links a
+#     console program, so launching the app pops a terminal window behind it.
+#     Switching the subsystem makes the linker look for WinMain instead of main,
+#     which Qt6::EntryPoint supplies.
+#   * An embedded icon. QApplication::setWindowIcon only sets the title-bar / WM
+#     icon; the file icon Explorer draws and the icon a pinned or grouped
+#     taskbar button uses come from the executable's resource table, so the .ico
+#     is compiled into the image through a generated resource script.
+if(WIN32)
+    enable_language(RC)
+
+    get_filename_component(LNB_APP_ICON
+            "${CMAKE_CURRENT_SOURCE_DIR}/../assets/appicon/app.ico" ABSOLUTE)
+    file(TO_NATIVE_PATH "${LNB_APP_ICON}" LNB_APP_ICON)
+    configure_file(
+            "${CMAKE_CURRENT_SOURCE_DIR}/../assets/appicon/local_notebook.rc.in"
+            "${CMAKE_CURRENT_BINARY_DIR}/local_notebook.rc"
+            @ONLY
+    )
+
+    target_sources(local_notebook_app PRIVATE
+            "${CMAKE_CURRENT_BINARY_DIR}/local_notebook.rc")
+    target_link_libraries(local_notebook_app PRIVATE Qt6::EntryPoint)
+    set_target_properties(local_notebook_app PROPERTIES WIN32_EXECUTABLE TRUE)
+endif()
+
+# ========== ---------- ---------- ---------- ==========
+#                      SCREENSHOTS
+# ========== ---------- ---------- ---------- ==========
+
+# Renders the windows README.md and docs/architecture.md embed. It seeds a scratch
+# store, builds the real widgets and saves what they paint, so it needs neither a
+# display server nor an endpoint. Kept out of the default build: run it by name.
+add_executable(local_notebook_screenshots
+        tools/screenshots.cpp
+        # The qrc has to sit on this target too, or the :/icons, :/appicon and
+        # :/licenses trees are never embedded and the icons come out blank.
+        ${CMAKE_CURRENT_SOURCE_DIR}/../assets/local_notebook.qrc
+)
+
+target_link_libraries(local_notebook_screenshots
+        PRIVATE
+        local_notebook::ui
+)
+
+target_compile_definitions(local_notebook_screenshots
+        PRIVATE
+        LOCAL_NOTEBOOK_VERSION="${PROJECT_VERSION}"
+)
+
+set_target_properties(local_notebook_screenshots PROPERTIES
+        EXCLUDE_FROM_ALL TRUE
+)
+
 # ========== ---------- ---------- ---------- ==========
 #                         CTESTS
 # ========== ---------- ---------- ---------- ==========

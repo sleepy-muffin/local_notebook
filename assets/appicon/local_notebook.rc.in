@@ -1,0 +1,10 @@
+// Windows resource script, configured by ui/CMakeLists.txt so the icon path is
+// absolute (rc.exe resolves relative paths against the build directory, not
+// against this file).
+//
+// The shell reads the icon for the executable file, a pinned shortcut and a
+// grouped taskbar button from this resource table, not from
+// QApplication::setWindowIcon -- that only reaches the window title bar. ID 1 is
+// the first icon in the group table, which is the one Explorer and the shell
+// pick by default.
+1 ICON "@LNB_APP_ICON@"
