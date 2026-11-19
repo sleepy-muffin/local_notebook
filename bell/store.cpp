@@ -259,14 +259,14 @@ std::filesystem::path felis::bell::store::assistant_settings(std::string_view uu
   return assistant_dir(uuid) / "settings.json";
 }
 
-std::filesystem::path felis::bell::store::assistant_db(std::string_view uuid) {
+std::filesystem::path felis::bell::store::assistant_db(std::string_view uuid) const {
   return assistant_dir(uuid) / "data.db";
 }
 
-std::filesystem::path felis::bell::store::assistant_log(std::string_view uuid) {
+std::filesystem::path felis::bell::store::assistant_log(std::string_view uuid) const {
   return assistant_dir(uuid) / "local-notebook.log";
 }
 
-std::filesystem::path felis::bell::store::assistant_lock(std::string_view uuid) {
+std::filesystem::path felis::bell::store::assistant_lock(std::string_view uuid) const {
   return assistant_dir(uuid) / "lock";
 }

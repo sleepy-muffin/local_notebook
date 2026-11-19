@@ -1,7 +1,8 @@
 // Opening the same assistant twice must be a refusal, not a crash: the second
-// `client` cannot take the instance lock, so it has to report that through
-// `open_assistant()` and leave itself unusable but harmless. The GUI relies on
-// this to show a dialog and go back to the picker instead of vanishing.
+// `client` cannot take the instance lock, so its construction throws
+// `open_error` carrying `ERR_ASSISTANT_LOCK_FAILED` and no object is left behind.
+// The GUI relies on this to show a dialog and go back to the picker instead of
+// vanishing.
 //
 //   reopen-conflict-check [data_root]
 //
@@ -9,6 +10,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <memory>
 #include <string>
 
 #include "client.hpp"
@@ -41,24 +43,28 @@ int main(int argc, char** argv) {
   }
 
   // The first client holds the lock for as long as it is alive.
-  store first_store(root);
-  client first(std::move(first_store), uuid);
-  check(first.open_assistant() == error_code::SUCCESS, "first open takes the lock");
+  std::unique_ptr<client> first;
+  try {
+    first = std::make_unique<client>(store(root), uuid);
+  } catch (const std::exception& error) {
+    std::printf("first open threw: %s\n", error.what());
+  }
 
-  // The second one must refuse without throwing.
-  bool threw = false;
+  check(first != nullptr, "first open takes the lock");
+
+  // The second one must refuse by throwing `open_error`, never by SIGSEGV.
+  bool wrong_exception = false;
   bool refused = false;
 
   try {
-    store second_store(root);
-    client second(std::move(second_store), uuid);
-
-    refused = second.open_assistant() == error_code::ERR_ASSISTANT_LOCK_FAILED;
+    const client second(store(root), uuid);
+  } catch (const open_error& error) {
+    refused = error.code() == error_code::ERR_ASSISTANT_LOCK_FAILED;
   } catch (const std::exception&) {
-    threw = true;
+    wrong_exception = true;
   }
 
-  check(!threw, "second open does not throw");
+  check(!wrong_exception, "second open throws only open_error");
   check(refused, "second open reports ERR_ASSISTANT_LOCK_FAILED");
 
   std::printf("\n%s (%d failure(s))\n", failures == 0 ? "ALL PASSED" : "FAILED",

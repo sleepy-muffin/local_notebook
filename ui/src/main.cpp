@@ -7,9 +7,8 @@
 #include <algorithm>
 #include <exception>
 #include <filesystem>
-#include <optional>
+#include <memory>
 #include <string>
-#include <utility>
 #include <vector>
 
 #include <felis/async.hpp>
@@ -72,27 +71,13 @@ int main(int argc, char **argv) {
   lnb::i18n::set_language(lnb::i18n::language_from_code(settings.language));
   ui::apply_theme(app, settings);
 
-  // Reopen the last assistant when auto-login is on and it is still on disk;
-  // otherwise ask. The picker works off the store; the client, which owns exactly
-  // one assistant, is built only after a selection is made.
+  // Reopen the last assistant when auto-login is on and it is still on disk.
+  // Otherwise the loop below asks; the picker works off the store, and the
+  // client, which owns exactly one assistant, is built only after a selection.
   std::string uuid = settings.last_assistant;
   const std::vector<std::string> uuids = store.scan_assistants();
   const bool reopen = settings.auto_login && !uuid.empty() &&
                       std::find(uuids.begin(), uuids.end(), uuid) != uuids.end();
-
-  if (!reopen) {
-    ui::AssistantPicker picker(store, settings);
-
-    if (picker.exec() != QDialog::Accepted) {
-      return 0;
-    }
-
-    uuid = settings.last_assistant;
-  }
-
-  if (uuid.empty()) {
-    return 0;
-  }
 
   // The turn runs on this shared executor; no task ever creates its own thread.
   felis::async::multi_executor<void()> executor(2);
@@ -101,7 +86,7 @@ int main(int argc, char **argv) {
   // be opened — typically because another instance already holds it. That refusal
   // is a dialog, never a process exit: on Windows there is no console, so dying
   // with a status code would look exactly like a crash.
-  std::optional<felis::bell::client> client;
+  std::unique_ptr<felis::bell::client> client;
   bool ask = !reopen;
 
   while (!client) {
@@ -127,16 +112,13 @@ int main(int argc, char **argv) {
 
     try {
       // `client` owns its store, so build a fresh one per attempt and keep the
-      // picker's copy usable for the next round.
-      felis::bell::client candidate(felis::bell::store(data_root), uuid);
-      const felis::bell::error_code opened = candidate.open_assistant();
-
-      if (opened == felis::bell::error_code::SUCCESS) {
-        client.emplace(std::move(candidate));
-        break;
-      }
-
-      refusal = ui::describe_open_failure(opened).toStdString();
+      // picker's copy usable for the next round. Construction is the open: it
+      // either yields a usable client or throws.
+      client = std::make_unique<felis::bell::client>(
+          felis::bell::store(data_root), uuid);
+      break;
+    } catch (const felis::bell::open_error &error) {
+      refusal = ui::describe_open_failure(error.code()).toStdString();
     } catch (const std::exception &error) {
       refusal = error.what();
     }

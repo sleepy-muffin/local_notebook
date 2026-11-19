@@ -68,12 +68,12 @@ public:
 
   [[nodiscard]] std::filesystem::path assistant_dir(std::string_view uuid) const;
   [[nodiscard]] std::filesystem::path assistant_settings(std::string_view uuid) const;
-  [[nodiscard]] std::filesystem::path assistant_db(std::string_view uuid);
-  [[nodiscard]] std::filesystem::path assistant_log(std::string_view uuid);
+  [[nodiscard]] std::filesystem::path assistant_db(std::string_view uuid) const;
+  [[nodiscard]] std::filesystem::path assistant_log(std::string_view uuid) const;
 
   // The instance lock held while this process has the assistant open. It is
   // deliberately never deleted; see instance_lock for why.
-  [[nodiscard]] std::filesystem::path assistant_lock(std::string_view uuid);
+  [[nodiscard]] std::filesystem::path assistant_lock(std::string_view uuid) const;
 
   void save_assistant(const std::string &uuid, const assistant &assistant) const;
 

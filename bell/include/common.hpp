@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <exception>
 #include <string>
 
 #include <felis/log.hpp>
@@ -26,7 +27,6 @@ enum class error_code : std::uint32_t {
   // shared assistant fold is running and would read this session's rows.
   ERR_SESSION_BUSY = 202,
   ERR_ASSISTANT_BUSY = 203,
-  ERR_ASSISTANT_HAS_NOT_LOADED_YET = 204,
   ERR_ASSISTANT_OR_ANY_SESSION_BUSY = 205,
   // The instance lock could not be taken: usually another process has the
   // assistant open, but it can also be a filesystem error. The accompanying
@@ -34,6 +34,29 @@ enum class error_code : std::uint32_t {
   ERR_ASSISTANT_LOCK_FAILED = 206,
 
 
+};
+
+// A `client` is either fully open or it does not exist: construction loads the
+// assistant, takes its instance lock, opens its log and database, and throws
+// `open_error` if any of that fails. Nothing is left half-built, so the caller
+// never has to guard against a null assistant or database.
+//
+// Only the category travels in the exception. The detail behind a refusal (the
+// pid holding the lock, the filesystem error) is logged, not carried: callers
+// branch on `code()` and the UI words the sentence from it, so there is no
+// free-form reason to keep in sync.
+class open_error : public std::exception {
+public:
+  explicit open_error(error_code code) : code_(code) {}
+
+  [[nodiscard]] error_code code() const noexcept { return code_; }
+
+  [[nodiscard]] const char* what() const noexcept override {
+    return "cannot open the assistant; see the log for the detail";
+  }
+
+private:
+  error_code code_;
 };
 
 

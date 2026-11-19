@@ -69,34 +69,19 @@ public:
   client(const client&) = delete;
   client& operator=(const client&) = delete;
 
-  client(client&&) = default;
-  client& operator=(client&&) = default;
+  // Every member is fixed once open, so there is no move or copy either: hold a
+  // client by pointer when an optional one is wanted.
+  client(client&&) = delete;
+  client& operator=(client&&) = delete;
 
-  // A refusal — typically another process already holds it — is reported as an
-  // error code rather than an exception, so the caller can explain it and fall
-  // back to the picker. Opening still does real work (loading the assistant,
-  // opening its log and database), so it can throw on a broken store; guard the
-  // call if it cannot escape.
-  client(store store, const std::string& uuid): store_(std::move(store)), assistant_uuid_(uuid) {}
-
-  // Opens (or re-opens) the current assistant: loads it, takes its instance lock,
-  // points the log at its directory and opens its database. Returns
-  // `ERR_ASSISTANT_LOCK_FAILED` when another process has it open, leaving the
-  // client unopened; `SUCCESS` otherwise. The log carries the detail of a refusal.
-  error_code open_assistant();
-
-  void open_log(const std::string &uuid) {
-    const auto path = store_.assistant_log(uuid);
-    try {
-      felis::log::set_output_file(path);
-    } catch (const std::exception &error) {
-      felis::log::error("cannot open log file {}: {}", path.string(), error.what());
-    }
-    felis::log::info("===== local-notebook session started =====");
-  }
+  // Opens the assistant immediately: loads it, takes its instance lock, points
+  // the log at its directory and opens its database. A failure unwinds as
+  // `open_error` — `ERR_ASSISTANT_LOCK_FAILED` when another process already holds
+  // it — instead of leaving a half-open object, so a constructed `client` is
+  // always usable. The log carries the detail of a refusal.
+  client(store store, const std::string& uuid);
 
   size_type create_session(const shadowed_session& session) {
-    felis::check(db_ != nullptr);
     return db_->insert_session(session);
   }
 
@@ -253,12 +238,26 @@ public:
   bool update_memory(std::stop_token stop, const prompt_events& events);
 
 private:
-  store store_;
-  std::string assistant_uuid_;
-  // std::unique_ptr<assistant> assistant_ = nullptr;
-  std::unique_ptr<felis::synchronized<assistant_state>> assistant_state_ = nullptr;
+  // Loads the assistant, takes its lock and opens its log; used only to build
+  // the `const` members in the initialiser list. Throws `open_error` on refusal.
+  std::unique_ptr<felis::synchronized<assistant_state>> open_state();
 
-  std::unique_ptr<database> db_ = nullptr;
+  void open_log(const std::string& uuid) {
+    const auto path = store_.assistant_log(uuid);
+    try {
+      felis::log::set_output_file(path);
+    } catch (const std::exception& error) {
+      felis::log::error("cannot open log file {}: {}", path.string(), error.what());
+    }
+    felis::log::info("===== local-notebook session started =====");
+  }
+
+  const store store_;
+  const std::string assistant_uuid_;
+  // Both are always non-null past construction; `unique_ptr` only makes them
+  // movable into place from the initialiser list.
+  const std::unique_ptr<felis::synchronized<assistant_state>> assistant_state_;
+  const std::unique_ptr<database> db_;
 };
 
 }

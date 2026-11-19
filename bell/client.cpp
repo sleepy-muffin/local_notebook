@@ -560,44 +560,34 @@ bool felis::bell::client::update_memory(
   return true;
 }
 
-felis::bell::error_code felis::bell::client::open_assistant() {
-  const auto& uuid = assistant_uuid_;
+felis::bell::client::client(store store, const std::string& uuid)
+  : store_(std::move(store)),
+    assistant_uuid_(uuid),
+    assistant_state_(open_state()),
+    db_(std::make_unique<database>(store_.assistant_db(uuid).string())) {
+  felis::log::info(
+    "opened assistant {} at {}", uuid, store_.assistant_dir(uuid).string());
+}
 
-  static std::mutex function_mutex;
-  std::lock_guard function_lock(function_mutex);
+std::unique_ptr<felis::synchronized<felis::bell::assistant_state>>
+felis::bell::client::open_state() {
+  const std::string& uuid = assistant_uuid_;
 
-  assistant assistant = store_.load_assistant(uuid);
-  const std::string requested = uuid;
+  assistant loaded = store_.load_assistant(uuid);
 
-  bool already_held = false;
-  if (assistant_state_ != nullptr) {
-    auto state = assistant_state_->lock();
-    already_held = state->filesystem_lock_ != nullptr && state->uuid_ == uuid;
+  auto filesystem_lock = std::make_unique<felis::legacy::instance_lock>();
+  std::string reason;
+  if (!filesystem_lock->acquire(store_.assistant_lock(uuid), reason)) {
+    // A refusal is ordinary: another instance may legitimately have this
+    // assistant open. Construction cannot leave a half-open client, so it unwinds
+    // instead; the reason (the holding process, or a filesystem error) is logged
+    // for the caller, which only needs the code to pick a sentence.
+    felis::log::error("cannot open assistant {}: {}", uuid, reason);
+    throw open_error(error_code::ERR_ASSISTANT_LOCK_FAILED);
   }
 
-  std::unique_ptr<felis::legacy::instance_lock> filesystem_lock;
-  if (!already_held) {
-    filesystem_lock = std::make_unique<felis::legacy::instance_lock>();
-    std::string reason;
-    if (!filesystem_lock->acquire(store_.assistant_lock(uuid), reason)) {
-      // A refusal is ordinary: another instance may legitimately have this
-      // assistant open. Report it to the caller instead of throwing, so the GUI
-      // can explain it and let the user pick another assistant. The lock names the
-      // holding process and any filesystem error, so the log keeps the detail.
-      felis::log::error("cannot open assistant {}: {}", uuid, reason);
-      return error_code::ERR_ASSISTANT_LOCK_FAILED;
-    }
-  } else {
-    filesystem_lock = std::move(assistant_state_->lock()->filesystem_lock_);
-  }
+  open_log(uuid);
 
-  assistant_state_ = std::make_unique<felis::synchronized<assistant_state>>(
-      requested, std::move(assistant), std::move(filesystem_lock));
-
-  open_log(requested);
-  felis::log::info("opened assistant {} at {}", requested, store_.assistant_dir(requested).string());
-
-  db_ = std::make_unique<database>(store_.assistant_db(requested).string());
-
-  return error_code::SUCCESS;
+  return std::make_unique<felis::synchronized<assistant_state>>(
+    uuid, std::move(loaded), std::move(filesystem_lock));
 }
