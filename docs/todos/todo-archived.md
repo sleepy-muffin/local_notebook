@@ -276,3 +276,8 @@ I will try to make this list ordered by time.
   points at `http://127.0.0.1:8080`.
 - (Refinement) Version moved to 0.6.0, so the About page and the window report a
   version instead of the long-stale 0.1.0.
+
+
+- (Bug) `run_command` on Windows may have codec problems on cases involving Chinese, can you make the defualt codec to utf-8 on windows? Or something else mature? (You can write to felis directly)
+
+- (Bug) The transcript view should not auto scroll if it's not already stick to the bottom, it usually works well, but it now occasionally fails, likely because the reset caused by reset, triggered in client::prompt_callback.
