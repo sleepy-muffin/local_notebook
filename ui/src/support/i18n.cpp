@@ -268,6 +268,7 @@ constexpr Entry kTranslations[] = {
     {"Authentication token", "身份驗證令牌", "身份验证令牌", "認証トークン", "Authentifizierungs-Token"},
     {"Optional", "可選", "可选", "任意", "Optional"},
     {"API URL", "API URL", "API URL", "API URL", "API-URL"},
+    {"Invalid API URL", "無效的 API URL", "无效的 API URL", "無効な API URL", "Ungültige API-URL"},
     {"The API URL must be an http:// or https:// base, for example https://api.example.com/v1.", "API URL 必須是 http:// 或 https:// 開頭的基礎位址，例如 https://api.example.com/v1。", "API URL 必须是 http:// 或 https:// 开头的基础地址，例如 https://api.example.com/v1。", "API URL は http:// または https:// で始まるベースである必要があります（例: https://api.example.com/v1）。", "Die API-URL muss eine Basis mit http:// oder https:// sein, zum Beispiel https://api.example.com/v1."},
     {"Token", "令牌", "令牌", "トークン", "Token"},
     {"Proxy", "代理", "代理", "プロキシ", "Proxy"},

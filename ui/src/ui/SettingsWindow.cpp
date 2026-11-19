@@ -9,6 +9,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QListWidget>
+#include <QMessageBox>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QShowEvent>
@@ -511,6 +512,17 @@ void SettingsWindow::restore_metrics_defaults() {
 }
 
 void SettingsWindow::save() {
+  // The endpoint is checked before anything else is touched: a malformed base must
+  // not be written to the assistant, and must not leave a half-applied settings
+  // change behind either, since `settings_` is the running application's copy.
+  if (assistant_form_ != nullptr) {
+    QString error;
+    if (!assistant_form_->validate_base_url(error)) {
+      QMessageBox::warning(this, trs("Invalid API URL"), error);
+      return;
+    }
+  }
+
   // Captured before the edits, so we can tell whether anything the theme depends
   // on changed and only restyle the running app when it actually did.
   const lnb::Settings previous = settings_;

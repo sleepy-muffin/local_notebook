@@ -66,7 +66,7 @@ public:
   void accept() override {
     QString error;
     if (!form_->validate_base_url(error)) {
-      form_->setToolTip(error);
+      QMessageBox::warning(this, trs("Invalid API URL"), error);
       return;
     }
     result_ = initial_;

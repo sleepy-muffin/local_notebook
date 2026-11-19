@@ -236,9 +236,15 @@ void AssistantForm::write_into(felis::bell::assistant& assistant) const {
 
 bool AssistantForm::validate_base_url(QString& error) const {
   const QString url = api_url_->text().trimmed();
+  const bool scheme = url.startsWith(QStringLiteral("http://")) ||
+                      url.startsWith(QStringLiteral("https://"));
 
-  if (url.isEmpty() || (!url.startsWith(QStringLiteral("http://")) &&
-                        !url.startsWith(QStringLiteral("https://")))) {
+  // A scheme with nothing behind it, or a URL carrying whitespace, is text that
+  // was pasted with its label attached; it would fail on the first request with a
+  // far less obvious message than this one.
+  const QString host_and_path = url.mid(url.indexOf(QStringLiteral("://")) + 3);
+
+  if (!scheme || host_and_path.isEmpty() || url.contains(QLatin1Char(' '))) {
     error = trs("The API URL must be an http:// or https:// base, for example "
                 "https://api.example.com/v1.");
     return false;
