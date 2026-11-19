@@ -7,7 +7,6 @@ An AI client optimized to be high-performance and comfortable to be used.
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows-cba6f7.svg)](#download)
 [![Built with Qt 6](https://img.shields.io/badge/Qt-6-cba6f7.svg)](https://qt.io)
 
-<!-- TODO: replace with a 30–60s demo GIF (see docs/architecture.md for the screenshot tool) -->
 ![Local Notebook](docs/screenshots/main-window-light.png)
 
 ---
@@ -27,9 +26,10 @@ conversations coherent with a **session summarization plus a shared assistant
 memory** that you can open, edit and regenerate yourself.
 
 Supports OpenAI-compatible endpoint local or remote, with optional SOCKS5
-HTTP-CONNECT proxy support.
+HTTP-CONNECT proxy support. Both the Responses API and the Chat Completions API
+are spoken, and each assistant picks the one its endpoint implements.
 
-Currently, supports 3 UI languages English, 中文 and 日本語.
+Currently, supports 5 UI languages: English, 简体中文, 繁體中文, 日本語 and Deutsch.
 
 Supports tools:
 - Searching online
@@ -37,14 +37,19 @@ Supports tools:
 
 ---
 
-![Summarisation review: the exact request is shown before it is sent](docs/screenshots/summary-review-light.png)
+## Build from source
 
-Two guarantees fall out of this design:
+Requires CMake 3.31+, Qt 6.8+ and a C++23 compiler.
 
-Remarks:
-Summarizing twice with no new messages produces the same 
-summary — because the watermarks only *count* what is new; they never decide 
-what gets sent.
+```sh
+git clone --recurse-submodules https://github.com/sleepy-muffin/local_notebook.git
+cmake --preset linux-x64-release
+cmake --build build/linux-x64-release -j
+```
+
+`ctest --test-dir build/linux-x64-release` runs the tests. The screenshots this
+README uses are rendered by `local_notebook_screenshots <output-directory>`,
+which needs neither a display server nor an endpoint.
 
 ---
 
