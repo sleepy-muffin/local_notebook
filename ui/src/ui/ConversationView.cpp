@@ -707,7 +707,10 @@ ConversationView::ConversationView(
 
 void ConversationView::reload() {
   const TranscriptCanvas::ScrollAnchor anchor = transcript_->anchor();
-  const bool follow = transcript_->at_bottom();
+  // Use the reader's intent, not the current geometry: this rebuild drops the
+  // streaming bubble, so at_bottom() could report "at the bottom" for someone
+  // who had scrolled up.
+  const bool follow = transcript_->sticking();
 
   if (stream_timer_ != nullptr) {
     stream_timer_->stop();

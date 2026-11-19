@@ -829,6 +829,14 @@ struct TranscriptCanvas::Private {
   bool relayouting = false;
   bool resizing = false;
 
+  // Whether the reader wants to follow the tail. This is intent, not geometry:
+  // it is only changed by a real scroll, never by our own setValue/setRange.
+  // A rebuild can shrink the document, which would leave the scrollbar sitting
+  // at the new maximum and make a purely geometric at_bottom() lie while the
+  // reader had deliberately scrolled up.
+  bool stick = true;
+  bool programmatic_scroll = false;
+
   std::function<void()> on_reach_top;
 
   [[nodiscard]] float origin() const {
@@ -911,29 +919,41 @@ struct TranscriptCanvas::Private {
     const int viewport_height = q->viewport()->height();
     const int content_height = static_cast<int>(std::ceil(layout.content_height()));
 
+    // Shrinking the range clamps the value, which looks like a scroll to the
+    // valueChanged handler. Do not let that overwrite the reader's intent.
+    const bool was_programmatic = programmatic_scroll;
+    programmatic_scroll = true;
     bar->setRange(0, std::max(0, content_height - viewport_height));
     bar->setPageStep(viewport_height);
     bar->setSingleStep(32);
+    programmatic_scroll = was_programmatic;
+  }
+
+  void set_scroll_value(int value) {
+    const bool was_programmatic = programmatic_scroll;
+    programmatic_scroll = true;
+    q->verticalScrollBar()->setValue(value);
+    programmatic_scroll = was_programmatic;
   }
 
   void restore_anchor(const TranscriptCanvas::ScrollAnchor& anchor) {
     auto* bar = q->verticalScrollBar();
 
     if (!anchor.valid) {
-      bar->setValue(std::min(bar->value(), bar->maximum()));
+      set_scroll_value(std::min(bar->value(), bar->maximum()));
       return;
     }
 
     const auto index = layout.message_by_id(anchor.message_id);
 
     if (!index.has_value() || *index >= layout.message_geometry().size()) {
-      bar->setValue(std::min(bar->value(), bar->maximum()));
+      set_scroll_value(std::min(bar->value(), bar->maximum()));
       return;
     }
 
     const float y = layout.message_geometry()[*index].rect.y;
     const int value = static_cast<int>(std::lround(y + origin() - anchor.viewport_offset));
-    bar->setValue(std::clamp(value, 0, bar->maximum()));
+    set_scroll_value(std::clamp(value, 0, bar->maximum()));
   }
 
   void maybe_load_more() {
@@ -997,7 +1017,7 @@ struct TranscriptCanvas::Private {
     resizing = true;
 
     const auto anchor = q->anchor();
-    const bool follow = q->at_bottom();
+    const bool follow = stick;
 
     relayouting = true;
     layout.set_options(options());
@@ -1301,6 +1321,15 @@ TranscriptCanvas::TranscriptCanvas(QWidget* parent)
     d_->maybe_load_more_deferred();
   });
 
+  // Remember the reader's intent to follow the tail. Every scrollbar move the
+  // user makes (wheel, keys, thumb, clicks) passes through here; our own moves
+  // are flagged so a clamp or a shrinking range does not overwrite it.
+  connect(verticalScrollBar(), &QScrollBar::valueChanged, this, [this](int) {
+    if (!d_->programmatic_scroll) {
+      d_->stick = at_bottom();
+    }
+  });
+
   refresh_style();
 }
 
@@ -1308,7 +1337,7 @@ TranscriptCanvas::~TranscriptCanvas() = default;
 
 void TranscriptCanvas::refresh_style() {
   const ScrollAnchor anchor = this->anchor();
-  const bool follow = at_bottom();
+  const bool follow = d_->stick;
 
   d_->selection = {};
   d_->layout.set_theme(d_->build_theme());
@@ -1338,6 +1367,10 @@ void TranscriptCanvas::set_document(
   d_->layout.set_document(std::move(document));
   d_->update_scrollbars();
 
+  // The caller's explicit choice wins: an anchored rebuild (loading older
+  // history) stays put, a follow rebuild keeps chasing the tail.
+  d_->stick = follow_bottom;
+
   if (follow_bottom) {
     scroll_to_bottom();
   } else {
@@ -1358,7 +1391,7 @@ void TranscriptCanvas::clear() {
 }
 
 void TranscriptCanvas::begin_streaming(render::Role role) {
-  const bool follow = at_bottom();
+  const bool follow = d_->stick;
 
   render::MessageMeta meta;
   meta.role = role;
@@ -1383,7 +1416,7 @@ void TranscriptCanvas::set_streaming_blocks(std::vector<render::Block> blocks) {
   // Read the reader's position before the tail grows; while they are parked at
   // the bottom the growing reply follows along, and once they scroll away it
   // stops chasing them.
-  const bool follow = at_bottom();
+  const bool follow = d_->stick;
 
   d_->layout.replace_last_message_blocks(std::move(blocks));
   d_->update_scrollbars();
@@ -1432,8 +1465,11 @@ bool TranscriptCanvas::at_bottom() const {
   return static_cast<float>(bar->value()) >= static_cast<float>(bar->maximum()) - kStickSlack;
 }
 
+bool TranscriptCanvas::sticking() const { return d_->stick; }
+
 void TranscriptCanvas::scroll_to_bottom() {
-  verticalScrollBar()->setValue(verticalScrollBar()->maximum());
+  d_->stick = true;
+  d_->set_scroll_value(verticalScrollBar()->maximum());
 }
 
 void TranscriptCanvas::scroll_to_message(std::uint32_t id) {
@@ -1446,7 +1482,10 @@ void TranscriptCanvas::scroll_to_message(std::uint32_t id) {
   auto* bar = verticalScrollBar();
   const float y = d_->layout.message_geometry()[*index].rect.y;
   const int value = static_cast<int>(std::lround(y + d_->origin() - 12.0f));
-  bar->setValue(std::clamp(value, 0, bar->maximum()));
+  d_->set_scroll_value(std::clamp(value, 0, bar->maximum()));
+  // A jump is a navigation, not a scroll: keep following only if it happened to
+  // land at the tail.
+  d_->stick = at_bottom();
 }
 
 std::u16string TranscriptCanvas::selected_text() const {

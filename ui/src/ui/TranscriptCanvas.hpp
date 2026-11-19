@@ -56,6 +56,10 @@ public:
 
   [[nodiscard]] ScrollAnchor anchor() const;
   [[nodiscard]] bool at_bottom() const;
+  // Whether the reader wants the view to follow the tail. Unlike at_bottom(),
+  // which samples the scrollbar geometry, this survives a rebuild that shrinks
+  // the document.
+  [[nodiscard]] bool sticking() const;
   void scroll_to_bottom();
 
   // Plain text of the current selection. Code blocks keep their own line
