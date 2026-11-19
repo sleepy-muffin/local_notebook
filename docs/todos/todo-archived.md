@@ -281,3 +281,5 @@ I will try to make this list ordered by time.
 - (Bug) `run_command` on Windows may have codec problems on cases involving Chinese, can you make the defualt codec to utf-8 on windows? Or something else mature? (You can write to felis directly)
 
 - (Bug) The transcript view should not auto scroll if it's not already stick to the bottom, it usually works well, but it now occasionally fails, likely because the reset caused by reset, triggered in client::prompt_callback.
+- (Refinement) A terminal should not show up on opening the Windows version.
+- (Refinement) icon (file icon, and the icon on task bar) is unset on Windows. Though, title bar icon is correctly set.

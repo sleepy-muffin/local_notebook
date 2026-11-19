@@ -4,6 +4,10 @@
 CMakePresets.json
 compile_commands.json
 
+# Installer build output
+/dist/
+/installer-stage/
+
 # Local IDE metadata
 .idea/
 .zed/

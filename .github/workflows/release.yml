@@ -468,6 +468,51 @@ jobs:
           path: local_notebook-${{ steps.version.outputs.tag }}-windows-x86_64.zip
           if-no-files-found: error
 
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+
+      - name: Build Windows installer
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          # Stage the deployed tree under a stable executable name, so the
+          # installed program is always local_notebook.exe rather than carrying
+          # the release tag. The portable zip was already produced above, so
+          # this staging copy does not disturb it.
+          $stage = "installer-stage"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item "release/*" $stage -Recurse
+          Rename-Item "$stage/local_notebook-$env:RELEASE_TAG.exe" "local_notebook.exe"
+
+          # choco installs Inno Setup 6 or 7 depending on the runner; the glob
+          # finds ISCC.exe under either.
+          $iscc = (Get-ChildItem "C:\Program Files*\Inno Setup*\ISCC.exe" |
+            Select-Object -First 1).FullName
+          if (-not $iscc) {
+            throw "ISCC.exe not found"
+          }
+
+          & $iscc `
+            "/DAppVersion=$env:RELEASE_TAG" `
+            "/DSourceDir=$((Resolve-Path $stage).Path)" `
+            "/DOutputDir=$((Resolve-Path '.').Path)\dist" `
+            "installer/local_notebook.iss"
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "ISCC failed"
+          }
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: local_notebook-windows-x86_64-installer
+          path: dist/local_notebook-*-windows-x86_64-setup.exe
+          if-no-files-found: error
+
   release:
     name: Publish GitHub Release
     needs: [linux, windows]
@@ -486,6 +531,11 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: local_notebook-windows-x86_64
+          path: release
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: local_notebook-windows-x86_64-installer
           path: release
 
       - name: Generate SHA256SUMS

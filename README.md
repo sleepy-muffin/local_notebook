@@ -16,7 +16,8 @@ An AI client optimized to be high-performance and comfortable to be used.
 | Platform | File |
 |---|---|
 | **Linux** (x86_64) | [`local_notebook-*-linux-x86_64.AppImage`](../../releases/latest) |
-| **Windows** (x86_64) | [`local_notebook-*-windows-x86_64.zip`](../../releases/latest) |
+| **Windows** (x86_64) | [`local_notebook-*-windows-x86_64-setup.exe`](../../releases/latest) — installer |
+| **Windows** (x86_64) | [`local_notebook-*-windows-x86_64.zip`](../../releases/latest) — portable |
 
 ---
 

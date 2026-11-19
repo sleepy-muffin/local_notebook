@@ -10,7 +10,5 @@ Do not remove titles even when the list has been cleared, just move them to `tod
 
 ## Active
 
-- (Refinement) icon (file icon, and the icon on task bar) is unset on Windows. Though, title bar icon is correctly set.
 - (Refinement) Windows platform should create the desktop shortcut automatically for the first time the app is launched.
-- (Refinement) A terminal should not show up on opening the Windows version.
 - (Bug) Dropdown list background is transparent on Windows.
