@@ -77,19 +77,21 @@ int main() {
   {
     const std::string out = felis::bell::execute_local_tool(
         command_call(R"({"command": "printf 'hi from %s' \"$PWD\""})"), roots, std::nullopt,
-        with_terminal);
+        with_terminal, std::nullopt);
     check(out.find("exit code: 0") != std::string::npos && out.find("/tmp") != std::string::npos &&
               out.find("hi from") != std::string::npos,
           "runs in the first shared directory");
   }
   {
     const std::string out = felis::bell::execute_local_tool(
-        command_call(R"({"command": "exit 7"})"), roots, std::nullopt, with_terminal);
+        command_call(R"({"command": "exit 7"})"), roots, std::nullopt, with_terminal,
+        std::nullopt);
     check(out.find("exit code: 7") != std::string::npos, "exit code reaches the model");
   }
   {
     const std::string out = felis::bell::execute_local_tool(
-        command_call(R"({"command": "true"})"), roots, std::nullopt, files_only);
+        command_call(R"({"command": "true"})"), roots, std::nullopt, files_only,
+        std::nullopt);
     check(out.find("disabled") != std::string::npos, "refused without the capability");
   }
   {
@@ -97,18 +99,19 @@ int main() {
     source.request_stop();
     const std::string out = felis::bell::execute_local_tool(
         command_call(R"({"command": "sleep 30"})"), roots, std::nullopt, with_terminal,
-        source.get_token());
+        std::nullopt, source.get_token());
     check(out.find("cancelled") != std::string::npos, "stop token cancels the command");
   }
   {
     const std::string out = felis::bell::execute_local_tool(
         command_call(R"({"command": "sleep 30", "timeout_seconds": 1})"), roots, std::nullopt,
-        with_terminal);
+        with_terminal, std::nullopt);
     check(out.find("timeout") != std::string::npos, "timeout_seconds honoured");
   }
   {
     const std::string out = felis::bell::execute_local_tool(
-        command_call(R"({"timeout_seconds": 5})"), roots, std::nullopt, with_terminal);
+        command_call(R"({"timeout_seconds": 5})"), roots, std::nullopt, with_terminal,
+        std::nullopt);
     check(out.find("Missing command") != std::string::npos, "empty command rejected");
   }
   {
@@ -117,7 +120,8 @@ int main() {
     const bool bash = felis::process::shell_name().find("bash") != std::string::npos;
     std::printf("shell: %s\n", felis::process::shell_name().c_str());
     const std::string out = felis::bell::execute_local_tool(
-        command_call(R"({"command": "false | true"})"), roots, std::nullopt, with_terminal);
+        command_call(R"({"command": "false | true"})"), roots, std::nullopt, with_terminal,
+        std::nullopt);
     check(bash ? out.find("exit code: 1") != std::string::npos
                : out.find("exit code: 0") != std::string::npos,
           "pipeline verdict follows the advertised shell");
@@ -131,7 +135,8 @@ int main() {
     }
     ::setenv("BASH_ENV", script, 1);
     const std::string out = felis::bell::execute_local_tool(
-        command_call(R"({"command": "echo body"})"), roots, std::nullopt, with_terminal);
+        command_call(R"({"command": "echo body"})"), roots, std::nullopt, with_terminal,
+        std::nullopt);
     check(out.find("MARKER-FROM-BASH-ENV") == std::string::npos &&
               out.find("body") != std::string::npos,
           "$BASH_ENV is stripped before exec");

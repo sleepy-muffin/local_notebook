@@ -473,6 +473,13 @@ void felis::bell::client::prompt(
       }
     }
 
+    // A cancellation that landed while a tool was running ends the turn here.
+    // Starting another model request with a stopped token would only turn the
+    // cancellation into a spurious error after the tool result.
+    if (stop.stop_requested()) {
+      break;
+    }
+
     // Prompts typed while this request ran are taken now, after its rows (text,
     // calls, results). They travel from the GUI as plain strings, not as
     // already-stored rows, so the worker stores them here — id order is

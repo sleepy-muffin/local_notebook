@@ -1,5 +1,6 @@
 
 #include <string>
+#include <stop_token>
 
 #include <felis/str.hpp>
 #include <felis/net/http.hpp>
@@ -231,7 +232,8 @@ const std::vector<felis::net::HttpHeader> kJsonHeaders{
 
 HttpResponse http_get_all(
     const std::string& url, const std::optional<std::string>& proxy, int max_bytes,
-    const std::vector<felis::net::HttpHeader>& headers, int read_timeout_ms
+    const std::vector<felis::net::HttpHeader>& headers, int read_timeout_ms,
+    std::stop_token stop
 ) {
   std::vector<felis::net::HttpHeader> merged{
       {"User-Agent", "Mozilla/5.0 (compatible; local-notebook/1.0)"},
@@ -273,7 +275,7 @@ HttpResponse http_get_all(
   };
 
   http_request(
-      "GET", url, proxy, merged, "", std::stop_token{}, on_response, on_body,
+      "GET", url, proxy, merged, "", stop, on_response, on_body,
       30'000, 5, read_timeout_ms
   );
 
@@ -387,9 +389,9 @@ constexpr int kFetchTextLimit = 8000; // characters returned to the model
 
 std::string http_get_with(
     const std::string& url, const std::optional<std::string>& proxy, int max_bytes,
-    const std::vector<felis::net::HttpHeader>& headers
+    const std::vector<felis::net::HttpHeader>& headers, std::stop_token stop
 ) {
-  auto body = http_get_body(url, proxy, max_bytes, std::stop_token{}, headers);
+  auto body = http_get_body(url, proxy, max_bytes, stop, headers);
 
   if (!body) {
     throw std::runtime_error(
@@ -401,13 +403,15 @@ std::string http_get_with(
 }
 
 std::string http_get(
-    const std::string& url, const std::optional<std::string>& proxy, int max_bytes
+    const std::string& url, const std::optional<std::string>& proxy, int max_bytes,
+    std::stop_token stop
 ) {
-  return http_get_with(url, proxy, max_bytes, kBrowserHeaders);
+  return http_get_with(url, proxy, max_bytes, kBrowserHeaders, stop);
 }
 
 std::string felis::bell::fetch_url(
-    const std::string& url, const std::optional<std::string>& proxy
+    const std::string& url, const std::optional<std::string>& proxy,
+    std::stop_token stop
 ) {
   const std::string trimmed_url = felis::str::trim(url);
 
@@ -420,8 +424,9 @@ std::string felis::bell::fetch_url(
   // which a strict JSON server rejects outright. The same applies to the cut
   // below, which must land on a code-point boundary rather than in the middle
   // of a multi-byte character.
-  const std::string text =
-      felis::str::sanitize_utf8(html_to_text(http_get(trimmed_url, proxy, kFetchBodyLimit)));
+  const std::string text = felis::str::sanitize_utf8(
+      html_to_text(http_get(trimmed_url, proxy, kFetchBodyLimit, stop))
+  );
 
   if (text.empty()) {
     return "The page returned no readable text.";
@@ -506,7 +511,7 @@ std::vector<SearchResult> parse_searxng_results(const std::string& json) {
 
 SearchOutcome search_searxng(
     const std::string& endpoint, const std::string& query,
-    const std::optional<std::string>& proxy
+    const std::optional<std::string>& proxy, std::stop_token stop
 ) {
   std::string base = trim(endpoint);
 
@@ -521,7 +526,7 @@ SearchOutcome search_searxng(
 
   const std::string url = base + "/search?q=" + url_encode(query) + "&format=json";
   const HttpResponse response =
-      http_get_all(url, effective, kFetchBodyLimit, kJsonHeaders, 180'000);
+      http_get_all(url, effective, kFetchBodyLimit, kJsonHeaders, 180'000, stop);
 
   if (response.status < 200 || response.status >= 300) {
     throw std::runtime_error(searxng_error_message(response.body, response.status));
@@ -565,7 +570,7 @@ SearchOutcome search_searxng(
 
 std::string felis::bell::web_search(
     const std::string& query, const std::optional<std::string>& proxy,
-    const std::string& endpoint
+    const std::string& endpoint, std::stop_token stop
 ) {
   const std::string trimmed_query = trim(query);
 
@@ -582,7 +587,8 @@ std::string felis::bell::web_search(
   }
 
   try {
-    const SearchOutcome outcome = search_searxng(endpoint, trimmed_query, proxy);
+    const SearchOutcome outcome =
+        search_searxng(endpoint, trimmed_query, proxy, stop);
 
     if (!outcome.results.empty()) {
       std::string text = format_search_results(outcome.results);
@@ -598,6 +604,12 @@ std::string felis::bell::web_search(
         (outcome.message.empty() ? std::string("no results") : outcome.message) +
         ". Try fetch_url on a known URL, or rephrase the query.";
   } catch (const std::exception& error) {
+    // A cancelled request is not a search failure: let the caller report the
+    // cancellation rather than dressing it up as a broken endpoint.
+    if (stop.stop_requested()) {
+      throw;
+    }
+
     return "Web search failed (" + std::string(error.what()) +
         "). Try fetch_url on a known URL, or check the assistant's Search "
         "endpoint setting.";

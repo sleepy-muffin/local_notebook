@@ -682,23 +682,41 @@ std::string felis::bell::execute_local_tool(
 
     if (call.name == "fetch_url") {
       const std::string url = json_string_or(args, "url");
-      return felis::bell::fetch_url(url, proxy);
+      return stop.stop_requested()
+          ? std::string("Tool error: cancelled")
+          : felis::bell::fetch_url(url, proxy, stop);
     }
 
     if (call.name == "web_search" && search_endpoint.has_value()) {
       const std::string query = json_string_or(args, "query");
-      return felis::bell::web_search(query, proxy, search_endpoint.value());
+      return stop.stop_requested()
+          ? std::string("Tool error: cancelled")
+          : felis::bell::web_search(query, proxy, search_endpoint.value(), stop);
     }
 
 
     throw std::runtime_error("Unknown tool: " + call.name);
   } catch (const std::filesystem::filesystem_error&) {
+    if (stop.stop_requested()) {
+      return "Tool error: cancelled";
+    }
+
     // A filesystem exception carries an actual path in its message, so it is
     // deliberately replaced with a path-free message before reaching the model.
     return "Tool error: The path could not be accessed";
   } catch (const std::exception& e) {
+    // The transport reports cancellation by throwing; it must not reach the
+    // model as a tool failure, nor end the turn as an error.
+    if (stop.stop_requested()) {
+      return "Tool error: cancelled";
+    }
+
     // Tool errors are returned to the model so it can retry with better
     // arguments instead of aborting the whole generation.
     return "Tool error: " + std::string(e.what());
+  } catch (...) {
+    // A tool must never unwind the turn. Even an exception that is not a
+    // std::exception becomes an ordinary tool result the model can react to.
+    return "Tool error: unexpected failure";
   }
 }

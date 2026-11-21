@@ -28,6 +28,22 @@ target_link_libraries(
 
 add_test(NAME reopen-conflict COMMAND reopen-conflict-check)
 
+# Network tools: a refused loopback connection must be returned to the model as
+# a tool result, not thrown, and the stop token must reach the transport. Needs
+# no server: 127.0.0.1:1 refuses immediately.
+add_executable(
+    tool-web-check
+    tool_web_check.cpp
+)
+
+target_link_libraries(
+    tool-web-check
+    PRIVATE
+    felis_bell
+)
+
+add_test(NAME tool-web COMMAND tool-web-check)
+
 # Live probe against a running OpenAI-compatible endpoint. Deliberately not an
 # `add_test`: the offline suite must not depend on a server being up.
 add_executable(
