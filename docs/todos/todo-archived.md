@@ -283,3 +283,5 @@ I will try to make this list ordered by time.
 - (Bug) The transcript view should not auto scroll if it's not already stick to the bottom, it usually works well, but it now occasionally fails, likely because the reset caused by reset, triggered in client::prompt_callback.
 - (Refinement) A terminal should not show up on opening the Windows version.
 - (Refinement) icon (file icon, and the icon on task bar) is unset on Windows. Though, title bar icon is correctly set.
+
+- (Refinement) Inno Setup for windows platform.

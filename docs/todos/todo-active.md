@@ -6,9 +6,8 @@ Do not remove titles even when the list has been cleared, just move them to `tod
 
 ## Pending
 
-- (Refinement) Queued steer messages might be multi-line, as the bubble should show a "..." behind, avoid making it multi-lined or extend the height, also, a "edit" button should be on the left of the close button, clicking on it should put this message back to the input box (append a new row if the input box is not empty)
+- (Bug) Dropdown list background is transparent on Windows.
 
 ## Active
 
-- (Refinement) Windows platform should create the desktop shortcut automatically for the first time the app is launched.
-- (Bug) Dropdown list background is transparent on Windows.
+- (Refinement) Queued steer messages might be multi-line, as the bubble should show a "..." behind, avoid making it multi-lined or extend the height, also, a "edit" button should be on the left of the close button, clicking on it should put this message back to the input box (append a new row if the input box is not empty)

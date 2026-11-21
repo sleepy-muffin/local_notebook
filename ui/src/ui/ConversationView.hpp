@@ -103,6 +103,11 @@ private:
 
   void load_older();
   void prompt_edit(std::uint32_t message_id, const QString& current);
+
+  // Puts a taken-back steer into the composer. Appends it on a fresh row when the
+  // composer already holds text, so nothing already typed is overwritten.
+  void append_to_composer(const QString& text);
+
   void flush_streaming_text();
   void submit();
   // Injects a prompt into the running turn without tearing down the reply that

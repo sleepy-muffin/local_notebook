@@ -19,6 +19,7 @@
 #include <QShowEvent>
 #include <QSizePolicy>
 #include <QStyle>
+#include <QTextCursor>
 #include <QTimer>
 #include <QToolButton>
 #include <QVBoxLayout>
@@ -245,7 +246,7 @@ public:
 
     if (hover_row_ >= static_cast<int>(entries_.size())) {
       hover_row_ = -1;
-      hover_remove_ = false;
+      hover_action_ = hover_action::none;
     }
 
     update_geometry();
@@ -255,6 +256,12 @@ public:
 
   void set_on_remove(std::function<void(std::uint64_t)> handler) {
     on_remove_ = std::move(handler);
+  }
+
+  // Called with the prompt's serial and text when its pencil is clicked, so the
+  // view can take it back out of the queue and into the composer.
+  void set_on_edit(std::function<void(std::uint64_t, std::string)> handler) {
+    on_edit_ = std::move(handler);
   }
 
   // Re-reads the font (a metric change) and repaints after a theme change.
@@ -301,17 +308,42 @@ protected:
       painter.drawLine(QPointF(mx - 3.0, my - 3.0), QPointF(mx, my));
       painter.drawLine(QPointF(mx, my), QPointF(mx - 3.0, my + 3.0));
 
-      // The prompt, one line, elided.
-      const QRect text_rect = box.adjusted(22, 0, -(kRemoveWidth + 6), 0);
+      // The prompt on a single line: `simplified()` folds any newlines into
+      // spaces, so a multi-line steer can never wrap the row or grow its height.
+      // A prompt that was multi-line keeps a trailing ellipsis, so it still reads
+      // as "there is more here" rather than as a short, complete prompt.
+      const QString raw = from_utf8(entries_[static_cast<std::size_t>(row)].text);
+      QString subject = raw.simplified();
+
+      if (raw.contains(QLatin1Char('\n')) && !subject.endsWith(QChar(0x2026))) {
+        subject += QChar(0x2026);
+      }
+
+      const QRect text_rect =
+          box.adjusted(22, 0, -(2 * kActionWidth + kActionGap + 6), 0);
       painter.setPen(colors.tool_text);
       painter.drawText(
           text_rect, Qt::AlignLeft | Qt::AlignVCenter,
-          fm.elidedText(from_utf8(entries_[static_cast<std::size_t>(row)].text), Qt::ElideRight,
-                        text_rect.width()));
+          fm.elidedText(subject, Qt::ElideRight, text_rect.width()));
+
+      // The edit pencil, left of the cross, brightening under the pointer.
+      const QRect edit = edit_rect(row);
+      const QIcon pencil =
+          edit_icon(row == hover_row_ && hover_action_ == hover_action::edit ? colors.accent
+                                                                           : colors.text_muted);
+
+      if (!pencil.isNull()) {
+        const int side = 14;
+        // QIcon::paint picks a pixmap for the painter's device, so the pencil
+        // stays crisp on a high-DPI display instead of being pre-scaled here.
+        const QRect target(
+            edit.center().x() - side / 2, edit.center().y() - side / 2, side, side);
+        pencil.paint(&painter, target);
+      }
 
       // The dismiss cross, brightening under the pointer.
       const QRect remove = remove_rect(row);
-      const bool active = row == hover_row_ && hover_remove_;
+      const bool active = row == hover_row_ && hover_action_ == hover_action::remove;
 
       QPen cross(active ? colors.accent : colors.text_muted);
       cross.setWidthF(1.3);
@@ -329,12 +361,12 @@ protected:
 
   void mouseMoveEvent(QMouseEvent* event) override {
     const int row = row_at(event->pos());
-    const bool over_remove = row >= 0 && remove_rect(row).contains(event->pos());
+    const hover_action action = action_at(row, event->pos());
 
-    if (row != hover_row_ || over_remove != hover_remove_) {
+    if (row != hover_row_ || action != hover_action_) {
       hover_row_ = row;
-      hover_remove_ = over_remove;
-      setCursor(over_remove ? Qt::PointingHandCursor : Qt::ArrowCursor);
+      hover_action_ = action;
+      setCursor(action == hover_action::none ? Qt::ArrowCursor : Qt::PointingHandCursor);
       update();
     }
 
@@ -344,7 +376,7 @@ protected:
   void leaveEvent(QEvent* event) override {
     if (hover_row_ != -1) {
       hover_row_ = -1;
-      hover_remove_ = false;
+      hover_action_ = hover_action::none;
       setCursor(Qt::ArrowCursor);
       update();
     }
@@ -356,9 +388,18 @@ protected:
     if (event->button() == Qt::LeftButton) {
       const int row = row_at(event->pos());
 
-      if (row >= 0 && remove_rect(row).contains(event->pos()) && on_remove_) {
-        on_remove_(entries_[static_cast<std::size_t>(row)].serial);
-        return;
+      if (row >= 0) {
+        const auto& entry = entries_[static_cast<std::size_t>(row)];
+
+        if (remove_rect(row).contains(event->pos()) && on_remove_) {
+          on_remove_(entry.serial);
+          return;
+        }
+
+        if (edit_rect(row).contains(event->pos()) && on_edit_) {
+          on_edit_(entry.serial, entry.text);
+          return;
+        }
       }
     }
 
@@ -366,7 +407,12 @@ protected:
   }
 
 private:
-  static constexpr int kRemoveWidth = 18;
+  enum class hover_action { none, edit, remove };
+
+  // The two trailing controls (pencil, cross) share one width, with a small gap
+  // so their hover areas never overlap.
+  static constexpr int kActionWidth = 18;
+  static constexpr int kActionGap = 2;
   static constexpr int kRowSpacing = 2;
 
   [[nodiscard]] int row_height() const { return QFontMetrics(font()).height() + 6; }
@@ -393,7 +439,40 @@ private:
 
   [[nodiscard]] QRect remove_rect(int row) const {
     const QRect box = row_rect(row);
-    return QRect(box.right() - kRemoveWidth, box.top(), kRemoveWidth, box.height());
+    return QRect(box.right() - kActionWidth + 1, box.top(), kActionWidth, box.height());
+  }
+
+  [[nodiscard]] QRect edit_rect(int row) const {
+    const QRect remove = remove_rect(row);
+    return QRect(
+        remove.left() - kActionGap - kActionWidth, remove.top(), kActionWidth, remove.height());
+  }
+
+  [[nodiscard]] hover_action action_at(int row, const QPoint& pos) const {
+    if (row < 0) {
+      return hover_action::none;
+    }
+
+    if (remove_rect(row).contains(pos)) {
+      return hover_action::remove;
+    }
+
+    if (edit_rect(row).contains(pos)) {
+      return hover_action::edit;
+    }
+
+    return hover_action::none;
+  }
+
+  // The bundled pencil, tinted and cached per colour so a repaint does not
+  // reload the resource for every row.
+  [[nodiscard]] QIcon edit_icon(const QColor& colour) {
+    if (edit_icon_.isNull() || edit_icon_colour_ != colour) {
+      edit_icon_colour_ = colour;
+      edit_icon_ = resource_icon(QStringLiteral("edit"), colour, colour);
+    }
+
+    return edit_icon_;
   }
 
   [[nodiscard]] int row_at(const QPoint& pos) const {
@@ -408,8 +487,11 @@ private:
 
   std::vector<ConversationController::steer_entry> entries_;
   std::function<void(std::uint64_t)> on_remove_;
+  std::function<void(std::uint64_t, std::string)> on_edit_;
   int hover_row_ = -1;
-  bool hover_remove_ = false;
+  hover_action hover_action_ = hover_action::none;
+  QIcon edit_icon_;
+  QColor edit_icon_colour_;
 };
 
 ConversationView::ConversationView(
@@ -597,6 +679,15 @@ ConversationView::ConversationView(
   steer_queue_ = new SteerQueue(this);
   steer_queue_->set_on_remove([this](std::uint64_t serial) {
     if (controller_.remove_steer(serial)) {
+      refresh_steer_queue();
+    }
+  });
+  steer_queue_->set_on_edit([this](std::uint64_t serial, std::string text) {
+    // Taken back out of the queue only if the worker has not drained it yet; a
+    // false return means it is already on its way to the turn, so editing it
+    // here would be a lie.
+    if (controller_.remove_steer(serial)) {
+      append_to_composer(from_utf8(text));
       refresh_steer_queue();
     }
   });
@@ -1025,6 +1116,21 @@ void ConversationView::prompt_edit(std::uint32_t message_id, const QString& curr
       on_changed_();
     }
   }
+}
+
+void ConversationView::append_to_composer(const QString& text) {
+  if (input_ == nullptr || text.isEmpty()) {
+    return;
+  }
+
+  if (input_->toPlainText().trimmed().isEmpty()) {
+    input_->setPlainText(text);
+  } else {
+    input_->moveCursor(QTextCursor::End);
+    input_->insertPlainText(QStringLiteral("\n") + text);
+  }
+
+  input_->setFocus();
 }
 
 void ConversationView::apply_composer_style() {
