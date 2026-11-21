@@ -285,3 +285,4 @@ I will try to make this list ordered by time.
 - (Refinement) icon (file icon, and the icon on task bar) is unset on Windows. Though, title bar icon is correctly set.
 
 - (Refinement) Inno Setup for windows platform.
+- (Bug) `fetch_url` failure should not interrupt the stream. A failed fetch is contained as a `Tool error: …` result so the turn continues, and the stop token now reaches the HTTP transport so cancellation is prompt.

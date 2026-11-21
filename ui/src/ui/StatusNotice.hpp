@@ -8,6 +8,7 @@
 
 class QLabel;
 class QMouseEvent;
+class QToolButton;
 
 namespace ui {
 
@@ -46,6 +47,7 @@ private:
 
   QLabel* icon_ = nullptr;
   QLabel* text_ = nullptr;
+  QToolButton* copy_ = nullptr;
   QString icon_name_;
   std::function<void()> on_click_;
 };

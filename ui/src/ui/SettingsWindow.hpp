@@ -93,6 +93,10 @@ private:
   QCheckBox* enter_modifier_ = nullptr;
   QSpinBox* rendered_limit_ = nullptr;
   QSpinBox* history_page_ = nullptr;
+  // Automatic re-attempt of a dead turn: how many times after the first, and how
+  // long to wait between attempts.
+  QSpinBox* retry_attempts_ = nullptr;
+  QSpinBox* retry_interval_ = nullptr;
 
   // Typography. Each family selector maps to a Settings string (empty means the
   // system default) and each size to the matching point size; the mono ratio

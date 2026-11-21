@@ -118,6 +118,8 @@ QJsonObject to_json(const Settings& settings) {
   object["enter_with_modifier"] = settings.enter_with_modifier;
   object["rendered_message_limit"] = settings.rendered_message_limit;
   object["history_page_size"] = settings.history_page_size;
+  object["retry_max_attempts"] = settings.retry_max_attempts;
+  object["retry_interval_ms"] = settings.retry_interval_ms;
 
   object["geometry"] = settings.geometry.has_value()
       ? QJsonValue(QString::fromStdString(*settings.geometry))
@@ -178,6 +180,10 @@ Settings from_json(const QJsonObject& object) {
       object.value("rendered_message_limit").toInt(settings.rendered_message_limit);
   settings.history_page_size =
       object.value("history_page_size").toInt(settings.history_page_size);
+  settings.retry_max_attempts =
+      object.value("retry_max_attempts").toInt(settings.retry_max_attempts);
+  settings.retry_interval_ms =
+      object.value("retry_interval_ms").toInt(settings.retry_interval_ms);
 
   if (object.value("geometry").isString()) {
     settings.geometry = object.value("geometry").toString().toStdString();

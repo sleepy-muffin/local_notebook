@@ -1,49 +1,80 @@
-#include "common.hpp"
-#include "felis/sync.hpp"
-#include "store.hpp"
-#include "tools.hpp"
-#include "felis/log.hpp"
-#include "felis/str.hpp"
-#include "message.hpp"
-#include <boost/json/object.hpp>
-#include <iostream>
 #include <algorithm>
-#include <mutex>
-#include <set>
-#include <string_view>
+#include <boost/json/object.hpp>
+#include <chrono>
+#include <condition_variable>
 #include <cstdio>
 #include <ctime>
+#include <iostream>
+#include <mutex>
+#include <set>
+#include <stop_token>
+#include <string_view>
 #include <unordered_set>
 #include <utility>
+#include "common.hpp"
+#include "felis/log.hpp"
+#include "felis/str.hpp"
+#include "felis/sync.hpp"
+#include "message.hpp"
+#include "store.hpp"
+#include "tools.hpp"
 
 #include <boost/json/parse.hpp>
 #include <boost/json/serialize.hpp>
 #include <boost/json/value.hpp>
 #include <boost/system/error_code.hpp>
 
-#include <felis/log.hpp>
 #include <boost/json.hpp>
+#include <felis/log.hpp>
 
 #include <felis/net/llm.hpp>
 
-#include "client.hpp"
 #include "application.hpp"
+#include "client.hpp"
 #include "request.hpp"
 
 
+// The transport's failure kinds are exactly the vocabulary a retry policy needs,
+// so they are preserved as codes instead of being flattened into the reason.
+static felis::bell::error_code request_failure_code(felis::net::llm::FailureKind kind) {
+  switch (kind) {
+    case felis::net::llm::FailureKind::Cancelled:
+      return felis::bell::error_code::ERR_CANCELLED;
+    case felis::net::llm::FailureKind::HttpStatus:
+      return felis::bell::error_code::ERR_REQUEST_HTTP;
+    case felis::net::llm::FailureKind::Stream:
+      return felis::bell::error_code::ERR_REQUEST_STREAM;
+    case felis::net::llm::FailureKind::Transport:
+      return felis::bell::error_code::ERR_REQUEST_TRANSPORT;
+  }
+  return felis::bell::error_code::ERR_REQUEST_TRANSPORT;
+}
 
+// Wait for `interval`, but wake immediately when `stop` is requested. Returns
+// true when the wait ran its course, false when a cancellation cut it short.
+static bool sleep_interruptibly(std::stop_token stop, std::chrono::milliseconds interval) {
+  if (interval.count() <= 0) {
+    return !stop.stop_requested();
+  }
+
+  std::mutex mutex;
+  std::condition_variable_any cv;
+  std::unique_lock<std::mutex> lock(mutex);
+
+  // The stop callback takes the same mutex, so a request that lands between the
+  // check below and the wait cannot be missed.
+  std::stop_callback wake(stop, [&cv] { cv.notify_all(); });
+  const bool finished = !cv.wait_for(lock, interval, [&stop] { return stop.stop_requested(); });
+  return finished;
+}
 
 // One streaming POST against the assistant's configured endpoint. The payload
 // was already shaped for that endpoint's protocol; the decoded deltas drive
 // `callbacks`. On success the finished turn is returned, otherwise
-// `std::nullopt` (with the reason copied into `error_out`).
+// `std::nullopt` (with the failure kind and reason copied into the out params).
 [[nodiscard]] std::optional<felis::net::llm::Result> stream_llm_request(
-  std::stop_token stop,
-  const boost::json::object& payload,
-  felis::bell::assistant ass,
-  const felis::net::llm::StreamCallbacks& callbacks,
-  std::string& error_out
-) {
+    std::stop_token stop, const boost::json::object &payload, felis::bell::assistant ass,
+    const felis::net::llm::StreamCallbacks &callbacks, felis::bell::error_code &code_out, std::string &error_out) {
   const std::string body = felis::str::sanitize_utf8(boost::json::serialize(payload));
 
   std::vector<felis::net::HttpHeader> headers{
@@ -63,18 +94,12 @@
   const bool chat = ass.protocol_ == felis::bell::api_protocol::chat_completions;
 
   auto result = felis::net::llm::stream_request(
-    chat ? felis::net::llm::Protocol::ChatCompletions
-         : felis::net::llm::Protocol::Responses,
-    ass.api_url_ + (chat ? "/chat/completions" : "/responses"),
-    ass.proxy_,
-    headers,
-    body,
-    stop,
-    60'000,
-    320'000,
-    callbacks);
+      chat ? felis::net::llm::Protocol::ChatCompletions : felis::net::llm::Protocol::Responses,
+      ass.api_url_ + (chat ? "/chat/completions" : "/responses"), ass.proxy_, headers, body, stop, 60'000, 320'000,
+      callbacks);
 
   if (!result) {
+    code_out = request_failure_code(result.error().kind);
     error_out = result.error().reason;
     felis::log::error("request failed: {}", error_out);
     return std::nullopt;
@@ -83,8 +108,7 @@
   return std::move(result.value());
 }
 
-felis::bell::size_type felis::bell::client::append_message(
-    size_type session_id, const shadowed_message& msg) {
+felis::bell::size_type felis::bell::client::append_message(size_type session_id, const shadowed_message &msg) {
   // Stamp the owning session: callers build a bare message (content + kind) and
   // rely on the client to key it. Without this the insert binds session_id 0 and
   // trips the FOREIGN KEY constraint.
@@ -93,8 +117,8 @@ felis::bell::size_type felis::bell::client::append_message(
   return size_type(db_->insert_message(stamped));
 }
 
-std::vector<felis::bell::shadowed_message> felis::bell::client::request_messages(
-    size_type session_id, bool is_auto_compact) {
+std::vector<felis::bell::shadowed_message>
+felis::bell::client::request_messages(size_type session_id, bool is_auto_compact) {
   // `compacted_at = 0` yields exactly "the last summary and everything after
   // it": summarization stamps every message it absorbed — including the previous
   // summary — with the id of the summary that consumed it, so only the newest
@@ -111,8 +135,9 @@ std::vector<felis::bell::shadowed_message> felis::bell::client::request_messages
   // after) the preserved tail. The model must read it first, as the recap of the
   // past, then the verbatim tail in conversation order. Hoist every summary row
   // to the front (stable, so their own order and the tail's order are preserved).
-  std::stable_partition(messages.begin(), messages.end(),
-    [](const shadowed_message& m) { return m.kind_ == message_kind::inline_compact; });
+  std::stable_partition(messages.begin(), messages.end(), [](const shadowed_message &m) {
+    return m.kind_ == message_kind::inline_compact;
+  });
 
   if (!is_auto_compact || messages.empty()) {
     return messages;
@@ -160,33 +185,24 @@ std::vector<felis::bell::shadowed_message> felis::bell::client::request_messages
   return messages;
 }
 
-felis::bell::size_type felis::bell::client::begin_turn(
-    size_type session_id, const std::string& prompt_text) {
-  // Persist the user's turn here, on the caller's thread. The caller (the UI) then
-  // rebuilds the transcript immediately and sees the prompt at once; the worker
-  // only runs the model against the id we return.
-  return append_message(
-      session_id, shadowed_message(prompt_text, message_kind::user_prompt));
+// Persist the user's turn here, on the caller's thread. The caller (the UI) then
+// rebuilds the transcript immediately and sees the prompt at once; the worker
+// only runs the model against the id we return.
+felis::bell::size_type felis::bell::client::begin_turn(size_type session_id, const std::string &prompt_text) {
+  return append_message(session_id, shadowed_message(prompt_text, message_kind::user_prompt));
 }
 
-void felis::bell::client::prompt(
-    std::stop_token stop,
-    size_type session_id,
-    size_type user_message_id,
-    const prompt_events& events,
-    const std::function<std::vector<std::string>()>& take_steering) {
+felis::bell::prompt_result felis::bell::client::prompt_once(
+    std::stop_token stop, size_type session_id, size_type user_message_id, const prompt_events &events,
+    const std::function<std::vector<std::string>()> &take_steering) {
 
-  static felis::synchronized<
-    std::unordered_map<felis::bell::size_type::_Size_Type, std::mutex>
-  > _session_id_locks;
-  auto _session_lock =
-    std::lock_guard<std::mutex>((*_session_id_locks.lock())[session_id.get()]);
+  static felis::synchronized<std::unordered_map<felis::bell::size_type::_Size_Type, std::mutex>> _session_id_locks;
+  auto _session_lock = std::lock_guard<std::mutex>((*_session_id_locks.lock())[session_id.get()]);
 
   std::optional<session> loaded = db_->get_session(session_id);
   if (!loaded.has_value()) {
     felis::log::error("cannot prompt session {}: it does not exist", session_id.get());
-    if (events.on_done) events.on_done(false, "session does not exist");
-    return;
+    return {error_code::ERR_INVALID_SESSION_ID, "session does not exist"};
   }
   session sess = std::move(*loaded);
   assistant assistant_snapshot = assistant_state_->lock().data_->assistant_;
@@ -195,59 +211,73 @@ void felis::bell::client::prompt(
   // key that every request in this turn is measured against.
 
   tool_capabilities caps = sess.tools();
+
+  bool idle = false;
+  felis::bell::error_code failure = felis::bell::error_code::SUCCESS;
+  std::string error;
+
   // Fold the eligible history into a summary, persist it, and mark the range it
   // absorbed as compacted. Returns false when there is nothing to summarize or
-  // the summarization request fails.
+  // the summarization request fails; `failure`/`error` then carry why. The
+  // summarizer's deltas are invisible context work: they never reach `on_text`,
+  // and the single `on_status` below is the only user-visible sign it ran. A
+  // blank summary is treated as a failed compaction: every absorbed message
+  // would otherwise point at an empty bubble and vanish from the transcript, so
+  // the history stays visible instead.
   auto compact = [&]() -> bool {
     const std::vector<shadowed_message> to_summarize = request_messages(session_id, true);
     if (to_summarize.empty()) {
       return false;
     }
 
-    if (events.on_status) events.on_status("Compacting context\u2026");
+    if (events.on_status)
+      events.on_status("Compacting context\u2026");
 
     const auto summary_payload = build_compaction_request(
-      "Summarize the conversation above so the work can continue without it. "
-      "Keep every fact, decision, file path, command and open task; drop only "
-      "small talk. Reply with the summary only.",
-      to_summarize,
-      sess.auto_compact_budget().get(),
-      assistant_snapshot,
-      sess.auto_compact_reasoning_effort()
-    );
+        "Summarize the conversation above so the work can continue without it. "
+        "Keep every fact, decision, file path, command and open task; drop only "
+        "small talk. Reply with the summary only.",
+        to_summarize, sess.auto_compact_budget().get(), assistant_snapshot, sess.auto_compact_reasoning_effort());
 
     // The summarizer's deltas are invisible context work: they must never reach
-    // `on_text`. Swallow the text, keep the stream alive, and let the single
-    // `on_status` above be the only user-visible sign that compaction ran.
+    // `on_text`. Swallow the text, keep the stream alive.
     felis::net::llm::StreamCallbacks summary_cbs;
     summary_cbs.on_text = [](std::string_view) { return true; };
 
     std::string summary_error;
-    std::optional<felis::net::llm::Result> summarized = stream_llm_request(
-      stop, summary_payload, assistant_snapshot, summary_cbs, summary_error);
+    felis::bell::error_code summary_failure = felis::bell::error_code::SUCCESS;
+    std::optional<felis::net::llm::Result> summarized =
+        stream_llm_request(stop, summary_payload, assistant_snapshot, summary_cbs, summary_failure, summary_error);
 
     if (!summarized.has_value()) {
+      // A cancel is the user's choice, not a broken turn: keep its code (and no
+      // message) so neither the tail nor the GUI reports it as a failure.
+      if (summary_failure == felis::bell::error_code::ERR_CANCELLED) {
+        failure = felis::bell::error_code::ERR_CANCELLED;
+      } else {
+        failure = felis::bell::error_code::ERR_COMPACTION_FAILED;
+        error = "auto-compaction failed; stopped so the history is not lost: " + summary_error;
+      }
       return false;
     }
 
     // A reasoning model can spend the whole output budget "thinking" and then
     // reply with a bare "\n\n" (or nothing), and some gateways do the same on
-    // truncation. Folding real history into such a summary is catastrophic: every
-    // absorbed message gets `compacted_at` pointing at an empty bubble and
-    // disappears from the transcript with nothing to replace it. Treat a blank
-    // summary as a failed compaction and leave the history visible instead.
+    // truncation. Folding real history into such a summary is catastrophic, so a
+    // blank summary is a failed compaction and the history stays visible.
     if (summarized->text.find_first_not_of(" \t\r\n\f\v") == std::string::npos) {
       felis::log::error(
-        "compaction produced a blank summary ({} output tokens); keeping history visible",
-        summarized->usage.output_tokens
-      );
+          "compaction produced a blank summary ({} output tokens); keeping history visible",
+          summarized->usage.output_tokens);
+      failure = felis::bell::error_code::ERR_COMPACTION_FAILED;
+      error = "auto-compaction produced a blank summary; stopped so the history is not lost";
       return false;
     }
 
     const size_type summary_id =
-      append_message(session_id, shadowed_message(summarized->text, message_kind::inline_compact));
+        append_message(session_id, shadowed_message(summarized->text, message_kind::inline_compact));
 
-    for (const shadowed_message& absorbed : to_summarize) {
+    for (const shadowed_message &absorbed: to_summarize) {
       if (absorbed.id_ != 0) {
         db_->compact_message(size_type(absorbed.id_), size_type(summary_id));
       }
@@ -255,40 +285,29 @@ void felis::bell::client::prompt(
 
     // Record the summarizer's own usage against the summary it produced, so
     // `context_usage` sees a paired `inline_compact` row and reports "unknown":
-    // the pre-summary count must never be read as the new context size.
-    //
-    // one request produces 0 to many message rows.
-    // A tool-only response with no reasoning item appends nothing from the model
-    // at all — there is no row to hang usage on. And a response with three tool calls
-    // appends three rows, so a usage column would either be written three times
-    // (tripling it in any naive sum) or written on one arbitrarily chosen row,
-    // which is a convention nothing enforces.
+    // the pre-summary count must never be read as the new context size. One
+    // request produces 0 to many message rows, so the measurement hangs on the
+    // summary itself, not on a message.
     if (summarized->usage.reported) {
       db_->record_request_usage(
-        summary_id,
-        static_cast<std::uint32_t>(summarized->usage.input_tokens),
-        static_cast<std::uint32_t>(summarized->usage.output_tokens));
+          summary_id, static_cast<std::uint32_t>(summarized->usage.input_tokens),
+          static_cast<std::uint32_t>(summarized->usage.output_tokens));
     }
 
     return true;
   };
 
-  bool idle = false;
-  bool ok = true;
-  std::string error;
-
   while (!idle) {
-    // Compaction runs at the head of every tool-loop iteration (it may fire
-    // mid-turn), mirroring Zed's top-of-loop check. If it fails (blank summary,
-    // request error, nothing absorbed) we must NOT continue: the alternative is
-    // building a request from a transcript that is already over the threshold,
-    // which either fails the same way again or silently drops history. Stop the
-    // turn instead, and surface it through `on_done` below — throwing here would
-    // unwind past `on_done` and leave the caller's turn stuck as "in progress".
+    // Any failure here breaks out and falls through to the single return below;
+    // see the function comment for why continuation is not an option.
     if (db_->exceeds_auto_compact_threshold(session_id)) {
       if (!compact()) {
-        ok = false;
-        error = "auto-compaction failed; stopped so the history is not lost";
+        // `compact` names its own failure; if it left the code unset (nothing
+        // eligible to fold) treat it as a compaction fault all the same.
+        if (failure == felis::bell::error_code::SUCCESS) {
+          failure = felis::bell::error_code::ERR_COMPACTION_FAILED;
+          error = "auto-compaction found nothing to fold; stopped so the history is not lost";
+        }
         break;
       }
     }
@@ -296,36 +315,22 @@ void felis::bell::client::prompt(
     const std::vector<shadowed_message> msgs = request_messages(session_id, false);
 
     const auto payload = build_turn_request(
-      assistant_snapshot,
-      build_custom_instructions(
-        sess.custom_instructions(),
-        assistant_snapshot.custom_instructions_,
-        assistant_snapshot.memory_),
-      msgs,
-      sess.reasoning_effort(),
-      caps,
-      sess.response_budget().get());
+        assistant_snapshot,
+        build_custom_instructions(
+            sess.custom_instructions(), assistant_snapshot.custom_instructions_, assistant_snapshot.memory_),
+        msgs, sess.reasoning_effort(), caps, sess.response_budget().get());
 
-    // Signal the start of this assistant message *before* any of its deltas. A
-    // single turn runs one model call per tool-loop iteration, and each call
-    // streams its own assistant message; without this boundary the UI would
-    // concatenate one message's text directly onto the next (across the tool
-    // calls between them), merging separate replies into a single paragraph
-    // until the turn ended and the DB round-trip split them apart again.
-    if (events.on_message_begin) events.on_message_begin();
-
-    // Forward the visible text and hidden reasoning to the caller as they
-    // stream. A prompt typed meanwhile is only *queued*; it is never delivered
-    // mid-stream, so it cannot cut this reply short. The queue is drained after
-    // the request's rows are stored, and the loop then runs one more iteration
-    // so the model answers the queued prompts inside this same turn.
+    if (events.on_message_begin)
+      events.on_message_begin();
     felis::net::llm::StreamCallbacks main_cbs;
     main_cbs.on_text = [&](std::string_view delta) -> bool {
-      if (events.on_text) events.on_text(delta);
+      if (events.on_text)
+        events.on_text(delta);
       return true;
     };
     main_cbs.on_reasoning = [&](std::string_view delta) {
-      if (events.on_reasoning) events.on_reasoning(delta);
+      if (events.on_reasoning)
+        events.on_reasoning(delta);
     };
     std::string serialized_payload = boost::json::serialize(payload);
 
@@ -334,47 +339,34 @@ void felis::bell::client::prompt(
     }
 
     std::string request_error;
-    std::optional<felis::net::llm::Result> result = stream_llm_request(
-      stop, payload, assistant_snapshot, main_cbs, request_error);
+    std::optional<felis::net::llm::Result> result =
+        stream_llm_request(stop, payload, assistant_snapshot, main_cbs, failure, request_error);
 
-    const felis::net::llm::Result* v = result ? &*result : nullptr;
+    const felis::net::llm::Result *v = result ? &*result : nullptr;
 
     if (v == nullptr) {
-      ok = false;
       error = request_error;
       break;
     }
 
-    // Measure this request against the turn's opening user message; reported
-    // usage is exactly what the auto-compact predicate reads next round. This is
-    // one row per request, not a column on a message: the rows appended below may
-    // be none (tool-only reply, no reasoning item) or several (text + N calls), so
-    // no single message owns this measurement. See the `request_usage` schema
-    // comment in `database.cpp` for the full rationale.
+    // Measure this request against the turn's opening user message; see the
+    // function comment for why it is a per-request row, not a message column.
     if (v != nullptr && v->usage.reported) {
       db_->record_request_usage(
-        user_message_id,
-        static_cast<std::uint32_t>(v->usage.input_tokens),
-        static_cast<std::uint32_t>(v->usage.output_tokens));
+          user_message_id, static_cast<std::uint32_t>(v->usage.input_tokens),
+          static_cast<std::uint32_t>(v->usage.output_tokens));
     }
 
     // std::cout << std::format("Remote: {}\n", v.text);
 
-    // Persist the reasoning item(s) this response produced so a later request can
-    // replay them and the model can resume its chain-of-thought. Inserted *first*,
-    // ahead of this turn's assistant text and tool calls, so the replayed
-    // `reasoning` item lands before the output/`function_call` items it belongs
-    // to. Which models deliver one is a property of the endpoint, not the family:
-    // a Responses-protocol reasoning model may return an item with only an opaque
-    // `encrypted_content` (GPT/o-series) or with a readable `summary`, and this
-    // code stores whichever it received. A model that returns no `reasoning` item
-    // (plain chat-completions output) simply produces no row.
+    // Persist the reasoning item(s) this response produced; see the function
+    // comment for why they come first and how each shape is normalised.
     if (v != nullptr) {
       boost::json::array reasoning_items;
       std::set<std::string> seen_reasoning_ids;
 
-      for (const boost::json::object& item : v->response_items) {
-        const boost::json::value* type = item.if_contains("type");
+      for (const boost::json::object &item: v->response_items) {
+        const boost::json::value *type = item.if_contains("type");
         if (type == nullptr || !type->is_string() || type->as_string() != "reasoning") {
           continue;
         }
@@ -385,24 +377,22 @@ void felis::bell::client::prompt(
         boost::json::object normalized;
         normalized["type"] = "reasoning";
 
-        if (const boost::json::value* id = item.if_contains("id"); id != nullptr) {
-          if (id->is_string()
-              && !seen_reasoning_ids.insert(std::string(id->as_string())).second) {
+        if (const boost::json::value *id = item.if_contains("id"); id != nullptr) {
+          if (id->is_string() && !seen_reasoning_ids.insert(std::string(id->as_string())).second) {
             continue;
           }
           normalized["id"] = *id;
         }
-        if (const boost::json::value* summary = item.if_contains("summary"); summary != nullptr) {
+        if (const boost::json::value *summary = item.if_contains("summary"); summary != nullptr) {
           normalized["summary"] = *summary;
         }
-        if (const boost::json::value* content = item.if_contains("content"); content != nullptr) {
+        if (const boost::json::value *content = item.if_contains("content"); content != nullptr) {
           normalized["content"] = *content;
         }
-        if (const boost::json::value* encrypted = item.if_contains("encrypted_content");
-            encrypted != nullptr) {
+        if (const boost::json::value *encrypted = item.if_contains("encrypted_content"); encrypted != nullptr) {
           normalized["encrypted_content"] = *encrypted;
         }
-        if (const boost::json::value* status = item.if_contains("status"); status != nullptr) {
+        if (const boost::json::value *status = item.if_contains("status"); status != nullptr) {
           normalized["status"] = *status;
         }
 
@@ -410,9 +400,8 @@ void felis::bell::client::prompt(
       }
 
       // A chat-completions reasoning model (DeepSeek) streams its thinking through
-      // `on_reasoning` instead of returning a `reasoning` item, so it would be
-      // lost once the turn ended. Record it as a display-only item: with no
-      // `encrypted_content` it is never replayed to the model.
+      // `on_reasoning` instead of returning a `reasoning` item; see the function
+      // comment.
       if (reasoning_items.empty() && !v->reasoning.empty()) {
         boost::json::object content;
         content["type"] = "reasoning_text";
@@ -427,8 +416,7 @@ void felis::bell::client::prompt(
       if (!reasoning_items.empty()) {
         boost::json::object envelope;
         envelope["reasoning_items"] = std::move(reasoning_items);
-        shadowed_message reasoning_row(
-          std::string(), message_kind::assistant_reasoning_payload);
+        shadowed_message reasoning_row(std::string(), message_kind::assistant_reasoning_payload);
         reasoning_row.reasoning_payload_ = boost::json::serialize(envelope);
         append_message(session_id, reasoning_row);
       }
@@ -436,64 +424,58 @@ void felis::bell::client::prompt(
 
     // The proxy rejects empty assistant text items, so only persist a reply
     // that actually carries something to replay.
-    const std::string& reply_text = v->text;
+    const std::string &reply_text = v->text;
     if (!reply_text.empty()) {
       append_message(session_id, shadowed_message(reply_text, message_kind::assistant_output));
     }
 
     if (v != nullptr && !v->tool_calls.empty()) {
-      for (const auto& call : v->tool_calls) {
+      for (const auto &call: v->tool_calls) {
         append_message(
-          session_id, shadowed_message(call.arguments, message_kind::assistant_tool_call, {call.id, call.name}));
+            session_id, shadowed_message(call.arguments, message_kind::assistant_tool_call, {call.id, call.name}));
       }
 
       // The calls are stored but not yet run: tell the caller now so the strips
       // are on screen while each tool blocks, rather than surfacing only when
       // the next model call's `on_message_begin` rebuilds the transcript.
-      if (events.on_rows_appended) events.on_rows_appended();
+      if (events.on_rows_appended)
+        events.on_rows_appended();
 
-      for (const auto& call : v->tool_calls) {
-        if (events.on_status) events.on_status("Running " + call.name);
+      for (const auto &call: v->tool_calls) {
+        if (events.on_status)
+          events.on_status("Running " + call.name);
         std::string tool_output = felis::bell::execute_local_tool(
-          call,
-          sess.shared_directories(),
-          assistant_snapshot.proxy_,
-          caps,
-          assistant_snapshot.search_endpoint_.empty()
-          ? std::nullopt
-          : std::optional(assistant_snapshot.search_endpoint_),
-          stop);
+            call, sess.shared_directories(), assistant_snapshot.proxy_, caps,
+            assistant_snapshot.search_endpoint_.empty() ? std::nullopt
+                                                        : std::optional(assistant_snapshot.search_endpoint_),
+            stop);
 
-        append_message(
-          session_id, shadowed_message(tool_output, message_kind::tool_result, {call.id, call.name}));
+        append_message(session_id, shadowed_message(tool_output, message_kind::tool_result, {call.id, call.name}));
 
         // Surface each result as it lands, so the strip replaces the running
         // placeholder while the remaining calls (if any) continue.
-        if (events.on_rows_appended) events.on_rows_appended();
+        if (events.on_rows_appended)
+          events.on_rows_appended();
       }
     }
 
     // A cancellation that landed while a tool was running ends the turn here.
-    // Starting another model request with a stopped token would only turn the
-    // cancellation into a spurious error after the tool result.
     if (stop.stop_requested()) {
+      failure = felis::bell::error_code::ERR_CANCELLED;
       break;
     }
 
-    // Prompts typed while this request ran are taken now, after its rows (text,
-    // calls, results). They travel from the GUI as plain strings, not as
-    // already-stored rows, so the worker stores them here — id order is
-    // conversation order.
+    // Prompts typed while this request ran are taken now, after its rows.
     std::vector<std::string> steered_prompts;
     if (take_steering) {
       steered_prompts = take_steering();
     }
 
     if (!steered_prompts.empty()) {
-      for (const std::string& prompt : steered_prompts) {
-        const size_type steer_id =
-          append_message(session_id, shadowed_message(prompt, message_kind::user_prompt));
-        if (events.on_steered) events.on_steered(steer_id);
+      for (const std::string &prompt: steered_prompts) {
+        const size_type steer_id = append_message(session_id, shadowed_message(prompt, message_kind::user_prompt));
+        if (events.on_steered)
+          events.on_steered(steer_id);
       }
 
       // Answer the queued prompts in this same turn instead of parking them
@@ -504,13 +486,74 @@ void felis::bell::client::prompt(
     }
   }
 
-  if (events.on_done) {
-    events.on_done(ok, error);
+  return {failure, std::move(error)};
+}
+
+// The retry loop that wraps one attempt. It catches an exception escaping an
+// attempt as an unknown exit (`ERR_INTERNAL`) so it never unwinds past the
+// caller, then re-attempts only when the policy and the stored-row count allow
+// it. `begin_turn` is never re-run: the user's prompt is already persisted, so
+// an attempt resumes from exactly where the last one stopped.
+felis::bell::prompt_result felis::bell::client::prompt(
+    std::stop_token stop, size_type session_id, size_type user_message_id, const prompt_events &events,
+    const std::function<std::vector<std::string>()> &take_steering, retry_policy policy) {
+  for (int attempt = 0;; ++attempt) {
+    const std::size_t rows_before = db_->message_count(session_id.get());
+
+    prompt_result result;
+    try {
+      result = prompt_once(stop, session_id, user_message_id, events, take_steering);
+    } catch (const std::exception &escaped) {
+      if (stop.stop_requested()) {
+        result = {error_code::ERR_CANCELLED, {}};
+      } else {
+        felis::log::error("prompt session {} left by exception: {}", session_id.get(), escaped.what());
+        result = {error_code::ERR_INTERNAL, escaped.what()};
+      }
+    } catch (...) {
+      if (stop.stop_requested()) {
+        result = {error_code::ERR_CANCELLED, {}};
+      } else {
+        felis::log::error("prompt session {} left by an unknown exception", session_id.get());
+        result = {error_code::ERR_INTERNAL, "the turn stopped for an unknown reason"};
+      }
+    }
+
+    if (result.ok() || stop.stop_requested() || !policy.retries(result.code)
+        || attempt >= policy.max_retries) {
+      if (!result.ok() && result.code != error_code::ERR_CANCELLED) {
+        felis::log::error("prompt session {} failed: {}", session_id.get(), result.error);
+      }
+      return result;
+    }
+
+    // An unknown exit is retried only when the attempt stored nothing: a partial
+    // turn already in the transcript must not be replayed into a duplicate.
+    if (result.code == error_code::ERR_INTERNAL && db_->message_count(session_id.get()) != rows_before) {
+      felis::log::error("prompt session {} failed after storing rows: {}", session_id.get(), result.error);
+      return result;
+    }
+
+    felis::log::info(
+        "turn attempt {}/{} failed ({}); retrying in {} ms", attempt + 1, policy.max_retries + 1,
+        to_string(result.code), policy.interval.count());
+
+    // Drop the torn bubble and reload the transcript before the new attempt
+    // streams, so its first delta does not append to the dead one.
+    if (events.on_status) {
+      events.on_status("Reconnecting\u2026");
+    }
+    if (events.on_message_begin) {
+      events.on_message_begin();
+    }
+
+    if (!sleep_interruptibly(stop, policy.interval)) {
+      return {error_code::ERR_CANCELLED, {}};
+    }
   }
 }
 
-bool felis::bell::client::update_memory(
-    std::stop_token stop, const prompt_events& events) {
+felis::bell::prompt_result felis::bell::client::update_memory(std::stop_token stop, const prompt_events &events) {
   // Snapshot the assistant once: the request is built from a consistent copy
   // even if the settings window edits the assistant while this runs.
   const assistant assistant_snapshot = assistant_state_->lock().data_->assistant_;
@@ -523,15 +566,14 @@ bool felis::bell::client::update_memory(
   // Nothing to merge is not an error: the first press on a fresh assistant.
   if (summaries.empty() && recent.empty()) {
     felis::log::info("memory update skipped: no summaries and no recent messages");
-    if (events.on_done) events.on_done(false, "no new conversation to merge into memory yet");
-    return false;
+    return {error_code::ERR_NOTHING_TO_UPDATE, "no new conversation to merge into memory yet"};
   }
 
-  if (events.on_status) events.on_status("Updating memory\u2026");
+  if (events.on_status)
+    events.on_status("Updating memory\u2026");
 
   const boost::json::object payload = build_memory_request(
-    assistant_snapshot.memory_, summaries, recent,
-    assistant_snapshot.memory_budget_, assistant_snapshot);
+      assistant_snapshot.memory_, summaries, recent, assistant_snapshot.memory_budget_, assistant_snapshot);
 
   // The memory update is invisible context work: its deltas must never reach the
   // transcript. Swallow the text and keep the stream alive.
@@ -539,13 +581,13 @@ bool felis::bell::client::update_memory(
   callbacks.on_text = [](std::string_view) { return true; };
 
   std::string request_error;
-  const std::optional<felis::net::llm::Result> merged = stream_llm_request(
-    stop, payload, assistant_snapshot, callbacks, request_error);
+  felis::bell::error_code failure = felis::bell::error_code::SUCCESS;
+  const std::optional<felis::net::llm::Result> merged =
+      stream_llm_request(stop, payload, assistant_snapshot, callbacks, failure, request_error);
 
   if (!merged.has_value()) {
     felis::log::error("memory update request failed: {}", request_error);
-    if (events.on_done) events.on_done(false, request_error);
-    return false;
+    return {failure, request_error};
   }
 
   // Same guard as compaction: a reasoning model can spend the whole output budget
@@ -553,32 +595,25 @@ bool felis::bell::client::update_memory(
   // would silently erase it.
   if (merged->text.find_first_not_of(" \t\r\n\f\v") == std::string::npos) {
     felis::log::error(
-      "memory update produced a blank reply ({} output tokens); memory left unchanged",
-      merged->usage.output_tokens);
-    if (events.on_done) events.on_done(false, "the model returned no memory text");
-    return false;
+        "memory update produced a blank reply ({} output tokens); memory left unchanged", merged->usage.output_tokens);
+    return {error_code::ERR_BLANK_REPLY, "the model returned no memory text"};
   }
 
   assistant updated = assistant_snapshot;
   updated.memory_ = merged->text;
   set_assistant(updated);
 
-  if (events.on_done) events.on_done(true, std::string_view());
-  return true;
+  return {};
 }
 
-felis::bell::client::client(store store, const std::string& uuid)
-  : store_(std::move(store)),
-    assistant_uuid_(uuid),
-    assistant_state_(open_state()),
-    db_(std::make_unique<database>(store_.assistant_db(uuid).string())) {
-  felis::log::info(
-    "opened assistant {} at {}", uuid, store_.assistant_dir(uuid).string());
+felis::bell::client::client(store store, const std::string &uuid)
+    : store_(std::move(store)), assistant_uuid_(uuid), assistant_state_(open_state()),
+      db_(std::make_unique<database>(store_.assistant_db(uuid).string())) {
+  felis::log::info("opened assistant {} at {}", uuid, store_.assistant_dir(uuid).string());
 }
 
-std::unique_ptr<felis::synchronized<felis::bell::assistant_state>>
-felis::bell::client::open_state() {
-  const std::string& uuid = assistant_uuid_;
+std::unique_ptr<felis::synchronized<felis::bell::assistant_state>> felis::bell::client::open_state() {
+  const std::string &uuid = assistant_uuid_;
 
   assistant loaded = store_.load_assistant(uuid);
 
@@ -595,6 +630,5 @@ felis::bell::client::open_state() {
 
   open_log(uuid);
 
-  return std::make_unique<felis::synchronized<assistant_state>>(
-    uuid, std::move(loaded), std::move(filesystem_lock));
+  return std::make_unique<felis::synchronized<assistant_state>>(uuid, std::move(loaded), std::move(filesystem_lock));
 }

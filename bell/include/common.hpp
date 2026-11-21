@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <exception>
 #include <string>
@@ -20,6 +21,23 @@ enum class error_code : std::uint32_t {
 
 
   ERR_INVALID_SESSION_ID = 100,
+
+  // Why a turn or a memory update stopped short. The set is meant to be a retry
+  // policy, not a mirror of every code path: cancellation is the user's choice,
+  // a transport or stream death is worth another attempt, an HTTP status is
+  // usually not (the endpoint answered), and the deterministic failures below
+  // never are.
+  ERR_CANCELLED = 101,
+  ERR_REQUEST_TRANSPORT = 102,
+  ERR_REQUEST_HTTP = 103,
+  ERR_REQUEST_STREAM = 104,
+  ERR_COMPACTION_FAILED = 105,
+  ERR_BLANK_REPLY = 106,
+  ERR_NOTHING_TO_UPDATE = 107,
+  // The turn left through a path that does not return a result (an escaping
+  // exception). Worth another attempt only when the attempt stored nothing, so
+  // the caller also checks that no new row appeared before re-running.
+  ERR_INTERNAL = 108,
   ERR_SESSION_SUMMARY_TRIGGER_HAS_MET = 200,
   ERR_ASSISTANT_MEMORY_TRIGGER_HAS_MET = 201,
 
@@ -34,6 +52,70 @@ enum class error_code : std::uint32_t {
   ERR_ASSISTANT_LOCK_FAILED = 206,
 
 
+};
+
+// A stable name for each code, for logs and for the retry decisions below.
+[[nodiscard]] inline const char* to_string(error_code code) noexcept {
+  switch (code) {
+    case error_code::SUCCESS:
+      return "SUCCESS";
+    case error_code::ERR_INVALID_SESSION_ID:
+      return "ERR_INVALID_SESSION_ID";
+    case error_code::ERR_CANCELLED:
+      return "ERR_CANCELLED";
+    case error_code::ERR_REQUEST_TRANSPORT:
+      return "ERR_REQUEST_TRANSPORT";
+    case error_code::ERR_REQUEST_HTTP:
+      return "ERR_REQUEST_HTTP";
+    case error_code::ERR_REQUEST_STREAM:
+      return "ERR_REQUEST_STREAM";
+    case error_code::ERR_COMPACTION_FAILED:
+      return "ERR_COMPACTION_FAILED";
+    case error_code::ERR_BLANK_REPLY:
+      return "ERR_BLANK_REPLY";
+    case error_code::ERR_NOTHING_TO_UPDATE:
+      return "ERR_NOTHING_TO_UPDATE";
+    case error_code::ERR_INTERNAL:
+      return "ERR_INTERNAL";
+    case error_code::ERR_SESSION_SUMMARY_TRIGGER_HAS_MET:
+      return "ERR_SESSION_SUMMARY_TRIGGER_HAS_MET";
+    case error_code::ERR_ASSISTANT_MEMORY_TRIGGER_HAS_MET:
+      return "ERR_ASSISTANT_MEMORY_TRIGGER_HAS_MET";
+    case error_code::ERR_SESSION_BUSY:
+      return "ERR_SESSION_BUSY";
+    case error_code::ERR_ASSISTANT_BUSY:
+      return "ERR_ASSISTANT_BUSY";
+    case error_code::ERR_ASSISTANT_OR_ANY_SESSION_BUSY:
+      return "ERR_ASSISTANT_OR_ANY_SESSION_BUSY";
+    case error_code::ERR_ASSISTANT_LOCK_FAILED:
+      return "ERR_ASSISTANT_LOCK_FAILED";
+  }
+  return "ERR_UNKNOWN";
+}
+
+// How many times `client::prompt` should re-attempt a turn that stopped short,
+// and how long to wait between attempts. `max_retries` counts re-attempts after
+// the first, so 0 disables retrying. Only failures another attempt can plausibly
+// cure are retried: a dead transport or stream, and an unknown exit that stored
+// no new row. A cancellation is the user's choice, an HTTP status is the
+// endpoint's answer, and the deterministic failures below never improve.
+struct retry_policy {
+  int max_retries = 0;
+  std::chrono::milliseconds interval{0};
+
+  [[nodiscard]] bool retries(error_code code) const noexcept {
+    if (max_retries <= 0) {
+      return false;
+    }
+    switch (code) {
+      case error_code::ERR_REQUEST_TRANSPORT:
+      case error_code::ERR_REQUEST_STREAM:
+      case error_code::ERR_INTERNAL:
+        return true;
+      default:
+        return false;
+    }
+  }
 };
 
 // A `client` is either fully open or it does not exist: construction loads the

@@ -25,6 +25,7 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <chrono>
 #include <functional>
 #include <optional>
 #include <string>
@@ -708,6 +709,15 @@ ConversationView::ConversationView(
   connect(expand_button_, &QToolButton::clicked, this, [this]() { toggle_composer_height(); });
   connect(send_button_, &QToolButton::clicked, this, [this]() { submit(); });
   connect(cancel_button_, &QToolButton::clicked, this, [this]() { controller_.cancel(); });
+
+  // Read the retry settings live: the next send uses whatever the settings
+  // window last saved, without reopening this session.
+  controller_.set_retry_policy([this]() {
+    felis::bell::retry_policy policy;
+    policy.max_retries = std::max(0, settings_.retry_max_attempts);
+    policy.interval = std::chrono::milliseconds(std::max(0, settings_.retry_interval_ms));
+    return policy;
+  });
 
   controller_.set_on_changed([this]() {
     reload();

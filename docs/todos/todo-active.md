@@ -12,4 +12,27 @@ Do not remove titles even when the list has been cleared, just move them to `tod
 
 ## Active
 
-- (Bug) `fetch_url` failure should not interrupt the stream. A failed fetch is contained as a `Tool error: …` result so the turn continues, and the stop token now reaches the HTTP transport so cancellation is prompt.
+- (Bug) A failed turn is now visible where the Doctor can find it: `bell::client::prompt`
+  logs the failure through `felis::log` itself (once, at the tail, with the reason)
+  and reports it to the GUI as its return value — `prompt_result { code, error }` —
+  instead of the abolished `on_done` callback. `error_code` gained a fine-grained
+  taxonomy (`ERR_CANCELLED`, `ERR_REQUEST_TRANSPORT`, `ERR_REQUEST_HTTP`,
+  `ERR_REQUEST_STREAM`, `ERR_COMPACTION_FAILED`, `ERR_BLANK_REPLY`,
+  `ERR_NOTHING_TO_UPDATE`) mapped straight from the transport's `FailureKind`, so
+  the planned automatic re-attempt can decide what is retryable without parsing
+  prose. `update_memory` returns the same shape, and the transcript notice now
+  carries a copy button.
+
+- (Feature) A turn that dies for a transport or stream reason is now re-attempted
+  automatically. `client::prompt` wraps the old body (`prompt_once`) in a retry
+  loop: an escaping exception becomes `ERR_INTERNAL` instead of unwinding past the
+  caller, `ERR_REQUEST_TRANSPORT`, `ERR_REQUEST_STREAM` and `ERR_INTERNAL` are
+  retried, and an unknown exit is retried only when the attempt stored no new row
+  (so a partial turn is never duplicated). `begin_turn` is never re-run. Attempts
+  and the interval come from `retry_policy` (set in the Configuration page, saved
+  in `settings.json`, read live by `ConversationController`); a cancel wakes the
+  sleep immediately. The bulky rationales inside `prompt_once` were lifted into a
+  doc comment above it, matching `prompt_events`.
+  - (Delayed) `ERR_REQUEST_HTTP` is deliberately not retried yet: `felis::net::llm::Failure`
+    carries no numeric status, so 429 cannot be told from 400. Opting 429/5xx in
+    needs a small felis change (`Failure` gaining `status`).

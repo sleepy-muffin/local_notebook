@@ -8,14 +8,14 @@
 #include <unordered_map>
 #include <vector>
 
-#include <felis/sync.hpp>
 #include <felis/legacy.hpp>
+#include <felis/sync.hpp>
 
+#include "application.hpp"
 #include "common.hpp"
+#include "database.hpp"
 #include "felis/log.hpp"
 #include "store.hpp"
-#include "database.hpp"
-#include "application.hpp"
 
 namespace felis::bell {
 
@@ -25,35 +25,65 @@ namespace felis::bell {
 //
 // Every hook is optional. `on_text` carries the visible assistant delta;
 // `on_reasoning` the hidden "thinking"; `on_status` a short human status (a tool
-// name, "compacting"); `on_message_begin` fires once at the start of every
+// name, "compacting");  fires once at the start of every
 // assistant message (each tool-loop iteration's model call), before that
-// message's deltas, so the UI can close the previous streaming bubble; `on_done`
-// fires exactly once with the terminal outcome.
+// message's deltas, so the UI can close the previous streaming bubble. The
+// turn's terminal outcome is not a callback: `prompt` returns it.
+//
+// ``on_message_begin``
+// Signal the start of this assistant message *before* any of its deltas. A
+// single turn runs one model call per tool-loop iteration, and each call
+// streams its own assistant message; without this boundary the UI would
+// concatenate one message's text directly onto the next (across the tool
+// calls between them), merging separate replies into a single paragraph
+// until the turn ended and the DB round-trip split them apart again.
+//
+// ``on_text``, ``on_reasoning``
+// Forward the visible text and hidden reasoning to the caller as they
+// stream. A prompt typed meanwhile is only *queued*; it is never delivered
+// mid-stream, so it cannot cut this reply short. The queue is drained after
+// the request's rows are stored, and the loop then runs one more iteration
+// so the model answers the queued prompts inside this same turn.
+//
+// ``on_rows_appended``
+// Fires after one or more transcript rows were committed for this turn (an
+// assistant tool call, a tool result). Runs on the worker thread *after* the
+// INSERT, so a GUI can rebuild from the DB without racing the write. The
+// tool-call emission lands before the tool executes, so the call is visible
+// while it runs instead of only once the next model call starts.
+//
+// ``on_steered``
+// Fires for every prompt steered into the running turn, with the id of the row
+// that now carries it. Emitted on the worker thread after the interrupted
+// request's own rows are stored, so the transcript order stays truthful.
+//
+// There is deliberately no completion hook: the turn's outcome is the return
+// value of `prompt`, not a callback.
 struct prompt_events {
   std::function<void(std::string_view)> on_text;
   std::function<void(std::string_view)> on_reasoning;
   std::function<void(std::string_view)> on_status;
   std::function<void()> on_message_begin;
-  std::function<void(bool ok, std::string_view error)> on_done;
-  // Fires after one or more transcript rows were committed for this turn (an
-  // assistant tool call, a tool result). Runs on the worker thread *after* the
-  // INSERT, so a GUI can rebuild from the DB without racing the write. The
-  // tool-call emission lands before the tool executes, so the call is visible
-  // while it runs instead of only once the next model call starts.
   std::function<void()> on_rows_appended;
-  // Fires for every prompt steered into the running turn, with the id of the row
-  // that now carries it. Emitted on the worker thread after the interrupted
-  // request's own rows are stored, so the transcript order stays truthful.
   std::function<void(size_type)> on_steered;
+};
+
+// The terminal outcome of one turn. `code` is `SUCCESS` when the turn ran to
+// completion; otherwise it names why it stopped (see `error_code`) while
+// `error` carries the human-readable reason — the same text the transcript
+// notice shows. The codes are fine-grained enough for a caller to decide
+// whether another attempt is worth making, without parsing the message.
+struct prompt_result {
+  error_code code = error_code::SUCCESS;
+  std::string error;
+
+  [[nodiscard]] bool ok() const noexcept { return code == error_code::SUCCESS; }
 };
 
 struct assistant_state {
 
-  assistant_state(
-      std::string uuid, assistant assistant,
-      std::unique_ptr<felis::legacy::instance_lock> filesystem_lock)
-          : uuid_(std::move(uuid)), assistant_(std::move(assistant)),
-            filesystem_lock_(std::move(filesystem_lock)) {}
+  assistant_state(std::string uuid, assistant assistant, std::unique_ptr<felis::legacy::instance_lock> filesystem_lock)
+      : uuid_(std::move(uuid)), assistant_(std::move(assistant)), filesystem_lock_(std::move(filesystem_lock)) {}
 
   std::string uuid_;
   assistant assistant_;
@@ -62,38 +92,31 @@ struct assistant_state {
 };
 
 
-class client{
+class client {
 
 public:
-
-  client(const client&) = delete;
-  client& operator=(const client&) = delete;
+  client(const client &) = delete;
+  client &operator=(const client &) = delete;
 
   // Every member is fixed once open, so there is no move or copy either: hold a
   // client by pointer when an optional one is wanted.
-  client(client&&) = delete;
-  client& operator=(client&&) = delete;
+  client(client &&) = delete;
+  client &operator=(client &&) = delete;
 
   // Opens the assistant immediately: loads it, takes its instance lock, points
   // the log at its directory and opens its database. A failure unwinds as
   // `open_error` — `ERR_ASSISTANT_LOCK_FAILED` when another process already holds
   // it — instead of leaving a half-open object, so a constructed `client` is
   // always usable. The log carries the detail of a refusal.
-  client(store store, const std::string& uuid);
+  client(store store, const std::string &uuid);
 
-  size_type create_session(const shadowed_session& session) {
-    return db_->insert_session(session);
-  }
+  size_type create_session(const shadowed_session &session) { return db_->insert_session(session); }
 
-  auto load_recent_messages(size_type session_id, size_t count = 5) {
-    return db_->recent_messages(session_id, count);
-  }
+  auto load_recent_messages(size_type session_id, size_t count = 5) { return db_->recent_messages(session_id, count); }
 
-  std::string custom_instructions(size_type session_id) {
-    return db_->custom_instructions(session_id);
-  }
+  std::string custom_instructions(size_type session_id) { return db_->custom_instructions(session_id); }
 
-  void set_custom_instructions(size_type session_id, const std::string& instructions) {
+  void set_custom_instructions(size_type session_id, const std::string &instructions) {
     db_->set_custom_instructions(session_id, instructions);
   }
 
@@ -104,18 +127,16 @@ public:
   // `session()` returns it separately. All of these delegate straight to the
   // database that `client` already owns.
 
-  [[nodiscard]] const store& get_store() const { return store_; }
+  [[nodiscard]] const store &get_store() const { return store_; }
 
   // ----- Assistant surface --------------------------------------------------
   //
   // The UI asks the store which assistants exist, edits the open one in place,
   // and reads the open assistant's settings (model, endpoint, proxy).
 
-  [[nodiscard]] std::vector<std::string> list_assistants() const {
-    return store_.scan_assistants();
-  }
+  [[nodiscard]] std::vector<std::string> list_assistants() const { return store_.scan_assistants(); }
 
-  [[nodiscard]] const std::string& assistant_uuid() const { return assistant_uuid_; }
+  [[nodiscard]] const std::string &assistant_uuid() const { return assistant_uuid_; }
 
   [[nodiscard]] assistant current_assistant() const {
     auto state = assistant_state_->lock();
@@ -124,7 +145,7 @@ public:
 
   // Replaces the open assistant's settings in memory and on disk. Used when the
   // picker edits the assistant that is currently open.
-  void set_assistant(const assistant& value) {
+  void set_assistant(const assistant &value) {
     {
       auto state = assistant_state_->lock();
       state->assistant_ = value;
@@ -132,16 +153,12 @@ public:
     store_.save_assistant(assistant_uuid_, value);
   }
 
-  [[nodiscard]] std::vector<shadowed_session> sessions(std::size_t limit = 0) {
-    return db_->sessions_by_recent(limit);
-  }
+  [[nodiscard]] std::vector<shadowed_session> sessions(std::size_t limit = 0) { return db_->sessions_by_recent(limit); }
 
-  [[nodiscard]] bool session_exists(size_type session_id) const {
-    return db_->session_exists(session_id);
-  }
+  [[nodiscard]] bool session_exists(size_type session_id) const { return db_->session_exists(session_id); }
 
   // Persists an edited session row (title, custom instructions, pin, budgets).
-  void save_session(const session& value) { db_->update_session(value); }
+  void save_session(const session &value) { db_->update_session(value); }
 
   [[nodiscard]] std::optional<felis::bell::session> load_session(size_type session_id) {
     return db_->get_session(session_id);
@@ -150,12 +167,12 @@ public:
   // Sets the reasoning level a session's normal chat turns run at. Called from the
   // composer's reasoning selector; the inline summariser uses its own
   // `auto_compact_reasoning_effort`, set through `save_session`.
-  void set_session_reasoning_effort(size_type session_id, const std::string& level) {
+  void set_session_reasoning_effort(size_type session_id, const std::string &level) {
     db_->set_session_reasoning_effort(session_id, level);
   }
 
   // Stamps the owning session onto `msg` and persists it; returns the new id.
-  size_type append_message(size_type session_id, const shadowed_message& msg);
+  size_type append_message(size_type session_id, const shadowed_message &msg);
 
   // The message range for one request: the last summary plus every message
   // after it. With `is_auto_compact`, the verbatim tail reserved by
@@ -165,25 +182,19 @@ public:
   // The full conversation, compacted rows included: the transcript the chat pane
   // renders. Kept separate from the model request, which only sees the summary
   // plus the live tail so it can review messages a summary has folded away.
-  [[nodiscard]] std::vector<shadowed_message> messages(size_type session_id) {
-    return db_->all_messages(session_id);
-  }
+  [[nodiscard]] std::vector<shadowed_message> messages(size_type session_id) { return db_->all_messages(session_id); }
 
   [[nodiscard]] std::unordered_map<std::uint32_t, std::string> session_last_times() {
     return db_->session_last_times();
   }
 
-  [[nodiscard]] std::size_t message_count(size_type session_id) {
-    return db_->message_count(session_id.get());
-  }
+  [[nodiscard]] std::size_t message_count(size_type session_id) { return db_->message_count(session_id.get()); }
 
-  void edit_message(size_type message_id, const std::string& content) {
+  void edit_message(size_type message_id, const std::string &content) {
     db_->update_message_content(message_id, content);
   }
 
-  void delete_message(size_type message_id) {
-    db_->remove_message(message_id);
-  }
+  void delete_message(size_type message_id) { db_->remove_message(message_id); }
 
   // Deletes `message_id` and every newer message of its session; returns the
   // number removed.
@@ -191,9 +202,7 @@ public:
     return db_->remove_messages_from(session_id, message_id);
   }
 
-  void delete_session(size_type session_id) {
-    db_->remove_session(session_id);
-  }
+  void delete_session(size_type session_id) { db_->remove_session(session_id); }
 
   [[nodiscard]] std::optional<std::uint64_t> context_usage(size_type session_id) const {
     return db_->context_usage(session_id);
@@ -203,7 +212,7 @@ public:
   // caller runs this on its own thread so the user's own message is committed
   // before it rebuilds the transcript — otherwise the rebuild races the worker's
   // insert and the prompt appears only after the turn finishes.
-  size_type begin_turn(size_type session_id, const std::string& prompt_text);
+  size_type begin_turn(size_type session_id, const std::string &prompt_text);
 
   // Drives one turn to completion: the user prompt (already persisted by
   // `begin_turn`, whose id is `user_message_id`) is the per-turn key, then loops
@@ -217,14 +226,19 @@ public:
   // not cut a reply short. The worker stores each one after the rows the finished
   // request produced — the transcript's id order is the conversation's order, so
   // the prompt must not be written by the thread that merely typed it — then runs
-  // another iteration so the model answers it in this same turn.
-  void prompt(
-    std::stop_token stop,
-    size_type session_id,
-    size_type user_message_id,
-    const prompt_events& events,
-    const std::function<std::vector<std::string>()>& take_steering = {}
-  );
+  // another iteration so the model answers it in this same turn. Returns the
+  // turn's outcome: a caller that reacts to its end (the GUI) reads it here, not
+  // from a callback.
+  //
+  // `policy` decides whether a failed attempt is re-run. Only a failure that
+  // stored nothing is retried (see `retry_policy`), and `begin_turn` is never
+  // re-run: the user's prompt is already persisted, so an attempt resumes from
+  // exactly where the last one stopped. A retry announces itself through
+  // `on_status` and `on_message_begin` first, so the GUI drops the torn bubble
+  // and reloads the transcript before the new attempt streams.
+  prompt_result prompt(
+      std::stop_token stop, size_type session_id, size_type user_message_id, const prompt_events &events,
+      const std::function<std::vector<std::string>()> &take_steering = {}, retry_policy policy = {});
 
   // Merges the assistant's memory from two pools: each standard session's newest
   // summary (`memory_budget_for_session_compact_`) and the newest conversation
@@ -233,20 +247,64 @@ public:
   //
   // Deliberately separate from `prompt`: this is manual and assistant-wide, never
   // auto-triggered, and it is not part of any session's turn. It blocks the
-  // calling thread, so run it on a worker. Returns false when both pools are
-  // empty or the request produced no usable text; the memory is left untouched.
-  bool update_memory(std::stop_token stop, const prompt_events& events);
+  // calling thread, so run it on a worker. Returns a failure result when both
+  // pools are empty or the request produced no usable text; the memory is left
+  // untouched.
+  prompt_result update_memory(std::stop_token stop, const prompt_events &events);
 
 private:
+  // One attempt at a turn; `prompt` calls it and decides whether to call it
+  // again. It may throw: `prompt` treats an escaping exception as an unknown
+  // exit (`ERR_INTERNAL`) rather than letting it unwind past the caller.
+  //
+  // Compaction runs at the head of every tool-loop iteration (it may fire
+  // mid-turn), mirroring Zed's top-of-loop check. If it fails (blank summary,
+  // request error, nothing absorbed) the turn must NOT continue: the alternative
+  // is building a request from a transcript that is already over the threshold,
+  // which either fails the same way again or silently drops history. The turn
+  // stops and returns instead of throwing, so the caller's turn is never left
+  // stuck as "in progress".
+  //
+  // Each request's usage is recorded against the turn's opening user message;
+  // reported usage is exactly what the auto-compact predicate reads next round.
+  // This is one row per request, not a column on a message: the rows appended by
+  // a request may be none (a tool-only reply with no reasoning item) or several
+  // (text + N calls), so no single message owns the measurement.
+  //
+  // Reasoning items are persisted first, ahead of this turn's assistant text and
+  // tool calls, so a replayed `reasoning` item lands before the output and
+  // `function_call` items it belongs to. Which models deliver one is a property
+  // of the endpoint, not the family: a Responses-protocol reasoning model may
+  // return an item with only an opaque `encrypted_content` (GPT/o-series) or
+  // with a readable `summary`, and whichever arrives is normalised to exactly the
+  // wire shape the Responses API accepts back and stored. A chat-completions
+  // reasoning model (DeepSeek) streams its thinking through `on_reasoning`
+  // instead, so it is recorded as a display-only item (no `encrypted_content`,
+  // never replayed). A model that returns no reasoning item simply produces no
+  // row.
+  //
+  // A cancellation that lands while a tool is running ends the turn: starting
+  // another model request with a stopped token would only turn the cancellation
+  // into a spurious error after the tool result.
+  //
+  // Prompts typed while a request ran are taken after that request's rows (text,
+  // calls, results). They travel from the GUI as plain strings, not as
+  // already-stored rows, so the worker stores them here — id order is
+  // conversation order — and then runs another iteration so the model answers
+  // them in this same turn, rather than parking them until the user sends again.
+  prompt_result prompt_once(
+      std::stop_token stop, size_type session_id, size_type user_message_id, const prompt_events &events,
+      const std::function<std::vector<std::string>()> &take_steering);
+
   // Loads the assistant, takes its lock and opens its log; used only to build
   // the `const` members in the initialiser list. Throws `open_error` on refusal.
   std::unique_ptr<felis::synchronized<assistant_state>> open_state();
 
-  void open_log(const std::string& uuid) {
+  void open_log(const std::string &uuid) {
     const auto path = store_.assistant_log(uuid);
     try {
       felis::log::set_output_file(path);
-    } catch (const std::exception& error) {
+    } catch (const std::exception &error) {
       felis::log::error("cannot open log file {}: {}", path.string(), error.what());
     }
     felis::log::info("===== local-notebook session started =====");
@@ -260,4 +318,4 @@ private:
   const std::unique_ptr<database> db_;
 };
 
-}
+} // namespace felis::bell

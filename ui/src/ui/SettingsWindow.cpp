@@ -280,6 +280,34 @@ QWidget* SettingsWindow::build_config_page() {
 
   layout->addWidget(h_separator(content));
 
+  // ---- Retry ----
+  // A turn that dies for a transport or stream reason is re-attempted from where
+  // it stopped. The count is re-attempts after the first (0 turns it off); the
+  // interval is the wait between them.
+  layout->addWidget(section_label(content, trs("Retry")));
+  {
+    auto* form = form_layout(content);
+
+    retry_attempts_ = make_spin(content, settings_.retry_max_attempts);
+    retry_attempts_->setRange(0, 10);
+    retry_attempts_->setSingleStep(1);
+    retry_attempts_->setToolTip(trs(
+        "Re-attempt a turn that stopped for a transport or stream reason. 0 disables retrying."
+    ));
+
+    retry_interval_ = make_spin(content, settings_.retry_interval_ms);
+    retry_interval_->setRange(0, 600000);
+    retry_interval_->setSingleStep(500);
+    retry_interval_->setSuffix(QStringLiteral(" ms"));
+
+    form->addRow(field_label(content, trs("Re-attempts")), retry_attempts_);
+    form->addRow(field_label(content, trs("Retry interval")), retry_interval_);
+
+    layout->addLayout(form);
+  }
+
+  layout->addWidget(h_separator(content));
+
   // ---- Startup ----
   // Auto-login is what skips the picker at launch. Because turning it on hides
   // the picker — the only other place to change it — it must also be reachable
@@ -472,6 +500,8 @@ void SettingsWindow::reload_from_app() {
   enter_modifier_->setChecked(settings_.enter_with_modifier);
   rendered_limit_->setValue(settings_.rendered_message_limit);
   history_page_->setValue(settings_.history_page_size);
+  retry_attempts_->setValue(settings_.retry_max_attempts);
+  retry_interval_->setValue(settings_.retry_interval_ms);
   auto_login_->setChecked(settings_.auto_login);
 
   set_font_box(ui_font_, settings_.ui_font);
@@ -535,6 +565,8 @@ void SettingsWindow::save() {
   settings_.enter_with_modifier = enter_modifier_->isChecked();
   settings_.rendered_message_limit = rendered_limit_->value();
   settings_.history_page_size = history_page_->value();
+  settings_.retry_max_attempts = retry_attempts_->value();
+  settings_.retry_interval_ms = retry_interval_->value();
   settings_.auto_login = auto_login_->isChecked();
 
   // `stored_family` keeps an unchanged "system default" selector empty instead
@@ -606,13 +638,12 @@ void SettingsWindow::start_memory_update() {
   felis::bell::client* api = &api_;
   memory_handle_ = executor_.spawn([api, state](std::stop_token stop) {
     felis::bell::prompt_events events;
-    events.on_done = [state](bool ok, std::string_view message) {
-      std::scoped_lock lock(state->mutex);
-      state->ok = ok;
-      state->message = std::string(message);
-      state->done = true;
-    };
-    api->update_memory(stop, events);
+    const felis::bell::prompt_result result = api->update_memory(stop, events);
+
+    std::scoped_lock lock(state->mutex);
+    state->ok = result.code == felis::bell::error_code::SUCCESS;
+    state->message = result.error;
+    state->done = true;
   });
 
   if (memory_poll_ != nullptr) {

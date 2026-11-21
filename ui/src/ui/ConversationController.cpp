@@ -65,19 +65,16 @@ bool ConversationController::send(std::string text) {
     item.id = id.get();
     state->events.push_back(std::move(item));
   };
-  events.on_done = [state](bool ok, std::string_view error) {
-    std::scoped_lock lock(state->mutex);
-    state->events.push_back(
-        event{ok ? event_kind::done_ok : event_kind::done_error, std::string(error)}
-    );
-  };
 
   // Capture a pointer to the (application-owned, longer-lived) client rather than
-  // `this`, so the worker never dereferences a destroyed controller.
+  // `this`, so the worker never dereferences a destroyed controller. The policy
+  // is read now, on the GUI thread, so the worker only sees a plain value.
   felis::bell::client* client = &client_;
+  const felis::bell::retry_policy policy =
+      retry_policy_ ? retry_policy_() : felis::bell::retry_policy{};
 
   handle_ = executor_.spawn(
-      [client, sid, user_message_id, events, state](std::stop_token stop) mutable {
+      [client, sid, user_message_id, events, state, policy](std::stop_token stop) mutable {
         // The worker drains the queued prompts at each request boundary, so they
         // never interrupt a reply that is still streaming.
         const std::function<std::vector<std::string>()> take = [state]() {
@@ -91,7 +88,18 @@ bool ConversationController::send(std::string text) {
           return pending;
         };
 
-        client->prompt(stop, sid, user_message_id, events, take);
+        const felis::bell::prompt_result result =
+            client->prompt(stop, sid, user_message_id, events, take, policy);
+
+        // The turn's outcome comes back here, not through a callback; hand it to
+        // the GUI on the same queue as the deltas, in the order it happened.
+        {
+          std::scoped_lock lock(state->mutex);
+          state->events.push_back(event{
+              result.code == felis::bell::error_code::SUCCESS ? event_kind::done_ok
+                                                              : event_kind::done_error,
+              result.error});
+        }
       }
   );
 

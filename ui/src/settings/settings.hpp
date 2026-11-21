@@ -66,6 +66,13 @@ struct Settings {
   int rendered_message_limit = 20;
   int history_page_size = 20;
 
+  // Automatic re-attempt of a turn that stopped for a transport or stream
+  // reason. `retry_max_attempts` counts re-attempts after the first (0 disables
+  // retrying); `retry_interval_ms` is the wait between them. Read by
+  // `ConversationController` for every send.
+  int retry_max_attempts = 1;
+  int retry_interval_ms = 1000;
+
   // Base64 window geometry (Qt saveGeometry), restored on the next launch.
   std::optional<std::string> geometry;
 

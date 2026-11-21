@@ -97,6 +97,13 @@ public:
     on_steered_ = std::move(handler);
   }
 
+  // Supplies the retry policy for a turn. Read when `send` starts the turn, so a
+  // settings change applies to the next send without reopening the view. An
+  // unset provider means no retrying.
+  void set_retry_policy(std::function<felis::bell::retry_policy()> provider) {
+    retry_policy_ = std::move(provider);
+  }
+
   // Drains the worker's queued events and dispatches them on the calling (GUI)
   // thread. Call from the window's poll timer.
   void poll();
@@ -150,6 +157,7 @@ private:
   std::function<void(const std::string&)> on_status_;
   std::function<void(const std::string&)> on_error_;
   std::function<void(std::uint32_t)> on_steered_;
+  std::function<felis::bell::retry_policy()> retry_policy_;
 };
 
 } // namespace ui
