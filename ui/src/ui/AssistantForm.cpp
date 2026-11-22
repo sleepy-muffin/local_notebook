@@ -1,5 +1,6 @@
 #include "ui/AssistantForm.hpp"
 
+#include <QCheckBox>
 #include <QComboBox>
 #include <QEvent>
 #include <QFormLayout>
@@ -100,6 +101,16 @@ AssistantForm::AssistantForm(QWidget* parent) : QWidget(parent) {
     api_url_->setPlaceholderText(trs("https://api.example.com/v1"));
     api_url_->installEventFilter(this);
 
+    // Sits directly under the API URL because it is a property of that endpoint:
+    // it relaxes verification for this assistant's requests only.
+    allow_self_signed_ = new QCheckBox(trs("Accept self-signed certificates"), this);
+    allow_self_signed_->setChecked(false);
+    allow_self_signed_->setToolTip(
+        trs("Trust any TLS certificate the API server presents, including one that is "
+            "self-signed or not issued for this host. Enable this only for a server you "
+            "control.")
+    );
+
     token_ = new QLineEdit(this);
     token_->setPlaceholderText(trs("Authentication token"));
     token_->setEchoMode(QLineEdit::Password);
@@ -121,6 +132,7 @@ AssistantForm::AssistantForm(QWidget* parent) : QWidget(parent) {
     summary_timeout_->setSuffix(QStringLiteral(" s"));
 
     form->addRow(field_label(this, trs("API URL")), api_url_);
+    form->addRow(QString(), allow_self_signed_);
     form->addRow(field_label(this, trs("Token")), token_);
     form->addRow(field_label(this, trs("Proxy")), proxy_);
     form->addRow(field_label(this, trs("Search endpoint")), search_endpoint_);
@@ -189,6 +201,7 @@ void AssistantForm::set_assistant(const felis::bell::assistant& assistant) {
   protocol_->setCurrentIndex(protocol_index >= 0 ? protocol_index : 0);
 
   api_url_->setText(to_qstring(assistant.api_url_));
+  allow_self_signed_->setChecked(assistant.allow_self_signed_certificates_);
   token_->setText(to_qstring(assistant.authentication_token_));
   proxy_->setText(
       assistant.proxy_.has_value() ? to_qstring(*assistant.proxy_) : QString());
@@ -213,6 +226,7 @@ void AssistantForm::write_into(felis::bell::assistant& assistant) const {
   assistant.authentication_token_ = token_->text().trimmed().toStdString();
   assistant.model_ = model_->currentText().trimmed().toStdString();
   assistant.api_url_ = api_url_->text().trimmed().toStdString();
+  assistant.allow_self_signed_certificates_ = allow_self_signed_->isChecked();
 
   assistant.protocol_ =
       static_cast<felis::bell::api_protocol>(protocol_->currentData().toInt());

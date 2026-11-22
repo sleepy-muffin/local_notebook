@@ -81,6 +81,8 @@ boost::json::object to_json(const felis::bell::assistant& assistant) {
   object["proxy"] = assistant.proxy_.has_value()
       ? boost::json::value(*assistant.proxy_)
       : boost::json::value(nullptr);
+  object["allow_self_signed_certificates"] =
+      assistant.allow_self_signed_certificates_;
   object["search_endpoint"] = assistant.search_endpoint_;
   object["memory"] = assistant.memory_;
 
@@ -123,6 +125,14 @@ felis::bell::assistant from_json(const boost::json::object& object) {
   if (const boost::json::value* proxy = object.if_contains("proxy");
       proxy != nullptr && proxy->is_string() && !proxy->as_string().empty()) {
     assistant.proxy_ = std::string(proxy->as_string());
+  }
+
+  // Absent or non-boolean reads as off: an assistant written before this switch
+  // existed must keep verifying certificates.
+  if (const boost::json::value* allow_self_signed =
+          object.if_contains("allow_self_signed_certificates");
+      allow_self_signed != nullptr && allow_self_signed->is_bool()) {
+    assistant.allow_self_signed_certificates_ = allow_self_signed->as_bool();
   }
 
   assistant.memory_ = string_or(object, "memory");

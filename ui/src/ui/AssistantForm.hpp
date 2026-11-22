@@ -4,6 +4,7 @@
 
 #include "store.hpp"
 
+class QCheckBox;
 class QComboBox;
 class QEvent;
 class QLineEdit;
@@ -36,6 +37,7 @@ private:
   QLineEdit* name_ = nullptr;
   QComboBox* model_ = nullptr;
   QLineEdit* api_url_ = nullptr;
+  QCheckBox* allow_self_signed_ = nullptr;
   QLineEdit* token_ = nullptr;
   QLineEdit* proxy_ = nullptr;
   QLineEdit* search_endpoint_ = nullptr;

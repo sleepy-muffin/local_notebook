@@ -20,6 +20,12 @@ public:
   std::optional<std::string> proxy_;
   api_protocol protocol_ = api_protocol::responses;
 
+  // Trust a self-signed (or otherwise unverified) TLS certificate presented by
+  // the API URL. Off by default: enabling it disables verification for this
+  // assistant's own requests only, so a local endpoint with a homemade
+  // certificate works without weakening web search or other assistants.
+  bool allow_self_signed_certificates_ = false;
+
   // Where web_search sends its queries: the base URL of a SearXNG-compatible
   // service, e.g. "http://127.0.0.1:8080" for a local SearXNG instance. Empty
   // means the user has not configured search; web_search then reports that to

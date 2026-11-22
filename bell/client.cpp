@@ -96,7 +96,7 @@ static bool sleep_interruptibly(std::stop_token stop, std::chrono::milliseconds 
   auto result = felis::net::llm::stream_request(
       chat ? felis::net::llm::Protocol::ChatCompletions : felis::net::llm::Protocol::Responses,
       ass.api_url_ + (chat ? "/chat/completions" : "/responses"), ass.proxy_, headers, body, stop, 60'000, 320'000,
-      callbacks);
+      callbacks, ass.allow_self_signed_certificates_);
 
   if (!result) {
     code_out = request_failure_code(result.error().kind);
