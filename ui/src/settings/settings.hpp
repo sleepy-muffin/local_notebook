@@ -71,7 +71,7 @@ struct Settings {
   // retrying); `retry_interval_ms` is the wait between them. Read by
   // `ConversationController` for every send.
   int retry_max_attempts = 1;
-  int retry_interval_ms = 1000;
+  int retry_interval_ms = 3000;
 
   // Base64 window geometry (Qt saveGeometry), restored on the next launch.
   std::optional<std::string> geometry;
