@@ -156,8 +156,9 @@ set_target_properties(local_notebook_app PROPERTIES
 #
 #   * A GUI subsystem image. `add_executable` with no `WIN32_EXECUTABLE` links a
 #     console program, so launching the app pops a terminal window behind it.
-#     Switching the subsystem makes the linker look for WinMain instead of main,
-#     which Qt6::EntryPoint supplies.
+#     Switching the subsystem makes the linker look for WinMain instead of main;
+#     Qt6::Core supplies that entry point itself through Qt6::EntryPointPrivate,
+#     for any executable carrying WIN32_EXECUTABLE.
 #   * An embedded icon. QApplication::setWindowIcon only sets the title-bar / WM
 #     icon; the file icon Explorer draws and the icon a pinned or grouped
 #     taskbar button uses come from the executable's resource table, so the .ico
@@ -176,7 +177,10 @@ if(WIN32)
 
     target_sources(local_notebook_app PRIVATE
             "${CMAKE_CURRENT_BINARY_DIR}/local_notebook.rc")
-    target_link_libraries(local_notebook_app PRIVATE Qt6::EntryPoint)
+    # Qt6::Core already hands the WinMain entry point to any executable marked
+    # WIN32_EXECUTABLE, via Qt6::EntryPointPrivate -- the Qt 6 successor to Qt 5's
+    # Qt5::WinMain. Naming it here is redundant, and the name this block used to
+    # reach for, Qt6::EntryPoint, is not a real target in Qt 6 at all.
     set_target_properties(local_notebook_app PROPERTIES WIN32_EXECUTABLE TRUE)
 endif()
 
