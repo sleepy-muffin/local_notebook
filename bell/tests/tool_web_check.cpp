@@ -33,7 +33,13 @@ static felis::net::llm::ToolCall fetch_call(std::string url) {
 }
 
 int main() {
-  std::setvbuf(stdout, nullptr, _IOLBF, 0);
+  // Unbuffered, so every line reaches the test log even if a later call dies
+  // abruptly. `_IOLBF` would be the natural choice, but MSVC treats it as full
+  // buffering and requires a size of at least 2; a zero size trips its
+  // invalid-parameter handler, which fast-fails the process (0xC0000409)
+  // before a single line is printed. glibc accepts the zero size, so the
+  // failure only ever showed up on Windows. `_IONBF` ignores the size.
+  std::setvbuf(stdout, nullptr, _IONBF, 0);
 
   using felis::bell::tool_capability;
   using felis::bell::tool_capabilities;
