@@ -168,7 +168,11 @@ if(WIN32)
 
     get_filename_component(LNB_APP_ICON
             "${CMAKE_CURRENT_SOURCE_DIR}/../assets/appicon/app.ico" ABSOLUTE)
-    file(TO_NATIVE_PATH "${LNB_APP_ICON}" LNB_APP_ICON)
+    # rc.exe treats a backslash inside the quoted path as an escape character, so
+    # a native path like D:\...\assets\app.ico loses its \a segments and the
+    # icon silently vanishes. Forward slashes it accepts happily, so normalise the
+    # path that way instead of with TO_NATIVE_PATH.
+    file(TO_CMAKE_PATH "${LNB_APP_ICON}" LNB_APP_ICON)
     configure_file(
             "${CMAKE_CURRENT_SOURCE_DIR}/../assets/appicon/local_notebook.rc.in"
             "${CMAKE_CURRENT_BINARY_DIR}/local_notebook.rc"
